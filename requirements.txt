@@ -1,0 +1,9 @@
+python-dotenv
+aiogram
+gspread
+google-auth
+pydantic-settings
+sqlalchemy
+aiosqlite
+apscheduler
+loguru
