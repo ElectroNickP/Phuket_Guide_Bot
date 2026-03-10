@@ -19,6 +19,8 @@ class User(Base):
     # Activity counters
     count_today = Column(Integer, default=0)
     count_tomorrow = Column(Integer, default=0)
+    count_sea_today = Column(Integer, default=0)
+    count_sea_tomorrow = Column(Integer, default=0)
     count_feedback = Column(Integer, default=0)
     count_status = Column(Integer, default=0)
     count_start = Column(Integer, default=0)

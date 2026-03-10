@@ -1,8 +1,9 @@
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from services.google_sheets import google_sheets
+from services.sea_plan import sea_plan_service
 from database.db import update_user_activity
-from utils.keyboards import get_schedule_keyboard
+from utils.keyboards import get_schedule_keyboard, get_sea_plan_keyboard
 from loguru import logger
 import datetime
 
@@ -57,6 +58,59 @@ async def process_schedule_query(callback: types.CallbackQuery):
     # Track activity
     action = "tomorrow" if is_tomorrow else "today"
     await update_user_activity(callback.from_user.id, action)
+
+@router.message(F.text == "🌊 План на море")
+async def cmd_sea_plan_buttons(message: types.Message):
+    """Show sea plan buttons"""
+    await message.answer("🌊 На какой день ты хочешь посмотреть план на море?", reply_markup=get_sea_plan_keyboard())
+
+@router.callback_query(F.data.startswith("sea_"))
+async def process_sea_query(callback: types.CallbackQuery):
+    """Process inline buttons for sea plan"""
+    is_tomorrow = "tomorrow" in callback.data
+    target_date = datetime.datetime.now().date()
+    if is_tomorrow:
+        target_date += datetime.timedelta(days=1)
+        
+    user_username = callback.from_user.username
+    if not user_username:
+        await callback.message.edit_text("❌ У тебя не установлен username в Телеграм.")
+        return
+
+    await callback.message.edit_text("🔍 Запрашиваю план на море...")
+    
+    try:
+        plans = await sea_plan_service.get_guide_sea_plan(user_username, target_date)
+        
+        if not plans:
+            await callback.message.edit_text(f"❌ План на море на {target_date.strftime('%d.%m')} для @{user_username} не найден.")
+            return
+
+        response = f"🌊 <b>План на море ({target_date.strftime('%d.%m')})</b>\n\n"
+        
+        for plan in plans:
+            response += f"🚢 <b>Лодка:</b> {plan['boat']}\n"
+            response += f"⚓️ <b>Пирс:</b> {plan['pier'] or '---'}\n"
+            response += f"👤 <b>Thai Guide:</b> {plan['thai_guide'] or '---'}\n"
+            response += f"👥 <b>Гид(ы):</b> {', '.join(plan['guides_list'])}\n"
+            response += f"📝 <b>Программы:</b>\n"
+            for prog in plan['programs']:
+                prog_text = f"{prog['name']} ({prog['pax']} pax)"
+                if len(plan['guides_list']) > 1:
+                    prog_text += f" - {prog['guide']}"
+                response += f"  • {prog_text}\n"
+            response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n\n"
+        
+        await callback.message.edit_text(response, parse_mode="HTML")
+        await callback.answer()
+        
+        # Track activity
+        action = "sea_tomorrow" if is_tomorrow else "sea_today"
+        await update_user_activity(callback.from_user.id, action)
+        
+    except Exception as e:
+        logger.error(f"Error fetching sea plan: {e}")
+        await callback.message.edit_text("❌ Произошла ошибка при получении плана на море.")
 
 @router.message(F.text == "👤 Мой статус")
 async def cmd_status(message: types.Message):

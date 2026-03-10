@@ -15,7 +15,9 @@ router = Router()
 
 class AdminStates(StatesGroup):
     waiting_for_sheet_url = State()
+    waiting_for_sea_sheet_url = State()
     waiting_for_guide_name = State()
+    waiting_for_guide_name_sea = State()
 
 @router.message(F.text == "🔗 Сменить таблицу")
 async def cmd_set_sheet_kb(message: types.Message, state: FSMContext):
@@ -47,6 +49,40 @@ async def process_sheet_url(message: types.Message, state: FSMContext):
         await message.answer(f"✅ Таблица успешно обновлена и подгружена!\nID: <code>{sheet_id}</code>", parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ Ошибка при подгрузке таблицы: {e}")
+        
+    await state.clear()
+
+@router.message(F.text == "🔗 Сменить таблицу (Море)")
+async def cmd_set_sea_sheet_kb(message: types.Message, state: FSMContext):
+    await message.answer("📝 Пришли мне URL или ID новой Google таблицы (ПЛАН НА МОРЕ):")
+    await state.set_state(AdminStates.waiting_for_sea_sheet_url)
+
+@router.message(AdminStates.waiting_for_sea_sheet_url)
+async def process_sea_sheet_url(message: types.Message, state: FSMContext):
+    raw_input = message.text
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw_input)
+    sheet_id = match.group(1) if match else raw_input
+
+    async with AsyncSessionLocal() as session:
+        query = select(AppSettings).where(AppSettings.key == "sea_spreadsheet_id")
+        result = await session.execute(query)
+        setting = result.scalar_one_or_none()
+        
+        if not setting:
+            setting = AppSettings(key="sea_spreadsheet_id", value=sheet_id)
+            session.add(setting)
+        else:
+            setting.value = sheet_id
+            
+        await session.commit()
+    
+    # Reload in service
+    from services.sea_plan import sea_plan_service
+    try:
+        await sea_plan_service.get_spreadsheet()
+        await message.answer(f"✅ Таблица (Море) успешно обновлена!\nID: <code>{sheet_id}</code>", parse_mode="HTML")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при подгрузке таблицы (Море): {e}")
         
     await state.clear()
 
@@ -100,6 +136,54 @@ async def process_guide_monitor(message: types.Message, state: FSMContext):
     
     await state.clear()
 
+@router.message(F.text == "🌊 Мониторинг моря")
+async def cmd_monitor_sea_guides(message: types.Message, state: FSMContext):
+    await message.answer("🌊 Введи username гида (через @), чей ПЛАН НА МОРЕ ты хочешь посмотреть:")
+    await state.set_state(AdminStates.waiting_for_guide_name_sea)
+
+@router.message(AdminStates.waiting_for_guide_name_sea)
+async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
+    target_username = message.text.replace("@", "").strip()
+    
+    from services.sea_plan import sea_plan_service
+    
+    # Try today and tomorrow
+    today = datetime.datetime.now().date()
+    tomorrow = today + datetime.timedelta(days=1)
+    
+    response = f"👁 <b>Архив/Мониторинг МОРЕ: @{target_username}</b>\n\n"
+    
+    found_any = False
+    for date in [today, tomorrow]:
+        date_str = date.strftime("%d.%m")
+        try:
+            plans = await sea_plan_service.get_guide_sea_plan(target_username, date)
+            if plans:
+                found_any = True
+                response += f"📅 <b>Дата: {date_str}</b>\n"
+                for plan in plans:
+                    response += f"🚢 <b>Лодка:</b> {plan['boat']}\n"
+                    response += f"⚓️ <b>Пирс:</b> {plan['pier'] or '---'}\n"
+                    response += f"👤 <b>Thai Guide:</b> {plan['thai_guide'] or '---'}\n"
+                    response += f"👥 <b>Гид(ы):</b> {', '.join(plan['guides_list'])}\n"
+                    response += f"📝 <b>Программы:</b>\n"
+                    for prog in plan['programs']:
+                        prog_text = f"{prog['name']} ({prog['pax']} pax)"
+                        if len(plan['guides_list']) > 1:
+                            prog_text += f" - {prog['guide']}"
+                        response += f"  • {prog_text}\n"
+                    response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n"
+                response += "\n"
+        except Exception as e:
+            logger.error(f"Error in admin sea monitor for {target_username} on {date_str}: {e}")
+
+    if not found_any:
+        await message.answer(f"❌ План на море для @{target_username} на сегодня/завтра не найден.")
+    else:
+        await message.answer(response, parse_mode="HTML")
+    
+    await state.clear()
+
 @router.message(F.text == "📊 Статистика")
 async def cmd_stats_kb(message: types.Message):
     async with AsyncSessionLocal() as session:
@@ -117,20 +201,20 @@ async def cmd_stats_kb(message: types.Message):
         # Sort users by activity: sum of all counters
         users_sorted = sorted(
             users, 
-            key=lambda u: (u.count_today or 0) + (u.count_tomorrow or 0) + (u.count_feedback or 0) + (u.count_status or 0) + (u.count_start or 0),
+            key=lambda u: (u.count_today or 0) + (u.count_tomorrow or 0) + (u.count_sea_today or 0) + (u.count_sea_tomorrow or 0) + (u.count_feedback or 0) + (u.count_status or 0) + (u.count_start or 0),
             reverse=True
         )
         
         user_list_str = ""
         for u in users_sorted:
             last_contact_str = u.last_contact.strftime("%d.%m %H:%M") if u.last_contact else "---"
-            total_act = (u.count_today or 0) + (u.count_tomorrow or 0) + (u.count_feedback or 0) + (u.count_status or 0) + (u.count_start or 0)
+            total_act = (u.count_today or 0) + (u.count_tomorrow or 0) + (u.count_sea_today or 0) + (u.count_sea_tomorrow or 0) + (u.count_feedback or 0) + (u.count_status or 0) + (u.count_start or 0)
             
             user_list_str += (
                 f"👤 @{u.username or 'no_user'}\n"
                 f"  🕒 Активен: {last_contact_str}\n"
-                f"  📊 Всего действий: {total_act}\n"
-                f"  (📅 {u.count_today}/{u.count_tomorrow} | 📝 {u.count_feedback} | 👤 {u.count_status})\n\n"
+                f"  📊 Всего: {total_act}\n"
+                f"  (📅 {u.count_today}/{u.count_tomorrow} | 🌊 {u.count_sea_today}/{u.count_sea_tomorrow} | 📝 {u.count_feedback} | 👤 {u.count_status})\n\n"
             )
             
     response = (

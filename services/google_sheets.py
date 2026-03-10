@@ -41,7 +41,12 @@ class GoogleSheetsService:
                 logger.info(f"Successfully loaded spreadsheet: {self._spreadsheet.title}")
             except Exception as e:
                 logger.error(f"Failed to open spreadsheet {sheet_id}: {e}")
-                raise e
+                # Don't raise, let the caller handle None if needed, 
+                # or return the stale version if it exists
+                if self._spreadsheet and self._current_spreadsheet_id == sheet_id:
+                    logger.warning("Using stale spreadsheet instance due to connection error.")
+                else:
+                    return None
         return self._spreadsheet
 
     async def get_current_month_sheet(self):
@@ -70,26 +75,34 @@ class GoogleSheetsService:
 
     def parse_guides(self, sheet):
         """
-        Parses Column A to identify staff and freelance guides.
+        Parses Column A to identify staff and freelance guides based on markers:
+        - Staff start after "ГИДЫ:"
+        - Staff end at "ВЫХОДНЫЕ"
+        - Freelance start after "ФРИЛАНС"
         """
         col_a = sheet.col_values(1)
         staff_guides = []
         freelance_guides = []
         
-        is_freelance_section = False
+        current_section = None # Can be 'staff' or 'freelance'
         
         for i, value in enumerate(col_a):
             row_idx = i + 1
-            if row_idx < 8:
-                continue
-            
             clean_value = str(value).strip().upper()
             
-            if "ФРИЛАНС" in clean_value:
-                is_freelance_section = True
+            if "ГИДЫ:" in clean_value:
+                current_section = 'staff'
                 continue
             
             if "ВЫХОДНЫЕ" in clean_value:
+                current_section = None
+                continue
+                
+            if "ФРИЛАНС" in clean_value:
+                current_section = 'freelance'
+                continue
+
+            if not current_section:
                 continue
 
             match = re.search(r'@(\w+)', str(value))
@@ -99,13 +112,14 @@ class GoogleSheetsService:
                     "raw_name": value,
                     "username": username,
                     "row": row_idx,
-                    "type": "freelance" if is_freelance_section else "staff"
+                    "type": current_section
                 }
-                if is_freelance_section:
-                    freelance_guides.append(guide_data)
-                else:
+                if current_section == 'staff':
                     staff_guides.append(guide_data)
+                elif current_section == 'freelance':
+                    freelance_guides.append(guide_data)
         
+        logger.info(f"Parsed {len(staff_guides)} staff and {len(freelance_guides)} freelance guides")
         return staff_guides, freelance_guides
 
     def get_guide_schedule(self, sheet, guide_row, day=None):

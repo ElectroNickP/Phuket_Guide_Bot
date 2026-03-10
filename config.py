@@ -6,7 +6,8 @@ class Settings(BaseSettings):
     BOT_TOKEN: SecretStr
     ADMIN_ID: int
     DEFAULT_SPREADSHEET_ID: str = "1VzzL9hKRSwqga1nsjJ9Df2AlkSBVw_6zRorXDy_MURs"
-    SERVICE_ACCOUNT_FILE: str = "/app/google service account/best-telegram-bots-9df5029c28e8.json"
+    DEFAULT_SEA_SPREADSHEET_ID: str = "1wtSeYmTnwcC5d-AxNt3zLaMZhe5-mRXfYJ-gm4nJQ7E"
+    SERVICE_ACCOUNT_FILE: str = "google service account/best-telegram-bots-9df5029c28e8.json"
     
     # Database settings
     DB_URL: str = "sqlite+aiosqlite:///data/bot_database.db"

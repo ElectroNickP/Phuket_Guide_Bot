@@ -4,16 +4,17 @@ Professional Telegram bot for managing guide schedules from Google Sheets.
 
 ## Features ✨
 
-- 📅 **Interactive Schedule**: View schedule for today and tomorrow with inline buttons.
+- 📅 **Interactive Schedule**: View boat assignments from the main schedule.
+- 🌊 **Sea Plan**: Detailed tour programs, pax counts, and boat info.
 - 👤 **Role Management**: Support for Staff and Freelance guides.
-- ⚠️ **Dynamic Notifications**: Instant alerts when the schedule changes in Google Sheets.
+- ⚠️ **Dynamic Notifications**: Instant alerts when the schedule changes.
 - 🛠 **Advanced Admin Panel**:
-  - 📊 **Detailed Statistics**: Track user activity, last contact, and engagement levels.
-  - ⏱ **Custom Polling**: Set spreadsheet update frequency (1 min to 1 hour) directly from the bot.
+  - 📊 **Detailed Statistics**: Track user activity and engagement.
+  - ⏱ **Custom Polling**: Set update frequency (1 min to 1 hour).
   - 👁 **Guide Monitoring**: Check any guide's schedule by username.
-  - 🔗 **Sheet Management**: Change the target Google Sheet ID on the fly.
-  - 📋 **Log Access**: View latest system logs via Telegram.
-- 📝 **Feedback System**: direct communication line from guides to administrator.
+  - 🔗 **Sheet Management**: Change both Main and Sea spreadsheet IDs.
+  - 📋 **Log Access**: View system logs via Telegram.
+- 📝 **Feedback System**: direct communication line to administrator.
 - 🐳 **Docker Ready**: Easy deployment using Docker Compose.
 
 ## Tech Stack 🛠

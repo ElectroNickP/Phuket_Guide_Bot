@@ -4,6 +4,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./google service account:/app/google service account
     env_file:
       - .env
     restart: always

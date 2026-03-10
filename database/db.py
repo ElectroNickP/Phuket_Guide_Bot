@@ -30,6 +30,10 @@ async def update_user_activity(telegram_id: int, action: str = None):
                 update_data["count_today"] = User.count_today + 1
             elif action == "tomorrow":
                 update_data["count_tomorrow"] = User.count_tomorrow + 1
+            elif action == "sea_today":
+                update_data["count_sea_today"] = User.count_sea_today + 1
+            elif action == "sea_tomorrow":
+                update_data["count_sea_tomorrow"] = User.count_sea_tomorrow + 1
             elif action == "feedback":
                 update_data["count_feedback"] = User.count_feedback + 1
             elif action == "status":

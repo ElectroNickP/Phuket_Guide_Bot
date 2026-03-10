@@ -2,17 +2,17 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 
 def get_main_menu_keyboard():
     keyboard = [
-        [KeyboardButton(text="📅 Моё расписание")],
+        [KeyboardButton(text="📅 Моё расписание"), KeyboardButton(text="🌊 План на море")],
         [KeyboardButton(text="👤 Мой статус"), KeyboardButton(text="📝 Обратная связь")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 def get_admin_menu_keyboard():
     keyboard = [
-        [KeyboardButton(text="👁 Мониторинг гидов")],
+        [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="🌊 Мониторинг моря")],
         [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="⏱ Интервал")],
-        [KeyboardButton(text="🔗 Сменить таблицу"), KeyboardButton(text="📋 Логи")],
-        [KeyboardButton(text="🔙 Главное меню")]
+        [KeyboardButton(text="🔗 Сменить таблицу"), KeyboardButton(text="🔗 Сменить таблицу (Море)")],
+        [KeyboardButton(text="📋 Логи"), KeyboardButton(text="🔙 Главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -35,4 +35,11 @@ def get_interval_keyboard():
             InlineKeyboardButton(text=intervals[i+1][0], callback_data=f"setint_{intervals[i+1][1]}")
         ]
         buttons.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_sea_plan_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="Сегодня", callback_data="sea_today")],
+        [InlineKeyboardButton(text="Завтра", callback_data="sea_tomorrow")]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
