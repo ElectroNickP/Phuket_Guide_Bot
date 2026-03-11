@@ -62,8 +62,10 @@ async def cmd_start(message: types.Message, bot: Bot):
         
         logger.debug(f"Determining keyboard for {message.from_user.id}")
         is_admin = (message.from_user.id in config.admin_id_list)
-        logger.debug(f"User {message.from_user.id} is_admin: {is_admin} (Config ADMIN_ID: {config.ADMIN_ID})")
-        
+        if not is_admin and message.from_user.username:
+            is_admin = message.from_user.username.lower() in config.admin_username_list
+            
+        logger.debug(f"User {message.from_user.id} is_admin: {is_admin} (Username: {message.from_user.username})")
         if is_admin:
             logger.debug("Calling get_admin_menu_keyboard")
             kb = get_admin_menu_keyboard()
