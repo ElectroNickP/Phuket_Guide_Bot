@@ -149,10 +149,17 @@ class SeaPlanService:
                 except (ValueError, TypeError):
                     pass
                 
+                short_guide = guide_str
+                # Attempt to extract just the @username
+                match_uname = re.search(r'(@\w+)', guide_str)
+                if match_uname:
+                    short_guide = match_uname.group(1)
+                
                 boats_data[boat_key]["programs"].append({
                     "name": prog_name,
                     "pax": pax_str,
-                    "guide": guide_str
+                    "guide": guide_str,
+                    "short_guide": short_guide
                 })
                 boats_data[boat_key]["total_pax"] += pax_val
 

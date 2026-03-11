@@ -96,9 +96,10 @@ async def process_sea_query(callback: types.CallbackQuery):
             response += f"📝 <b>Программы:</b>\n"
             for prog in plan['programs']:
                 prog_text = f"{prog['name']} ({prog['pax']} pax)"
-                if len(plan['guides_list']) > 1:
-                    prog_text += f" - {prog['guide']}"
-                response += f"  • {prog_text}\n"
+                if len(plan['guides_list']) > 1 and prog['guide']:
+                    response += f"  • {prog_text} - {prog['short_guide']}\n"
+                else:
+                    response += f"  • {prog_text}\n"
             response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n\n"
         
         await callback.message.edit_text(response, parse_mode="HTML")

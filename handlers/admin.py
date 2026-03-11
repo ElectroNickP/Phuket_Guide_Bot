@@ -194,8 +194,8 @@ async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
                     response += f"📝 <b>Программы:</b>\n"
                     for prog in plan['programs']:
                         prog_text = f"{prog['name']} ({prog['pax']} pax)"
-                        if len(plan['guides_list']) > 1:
-                            prog_text += f" - {prog['guide']}"
+                        if len(plan['guides_list']) > 1 and prog.get('short_guide'):
+                            prog_text += f" - {prog['short_guide']}"
                         response += f"  • {prog_text}\n"
                     response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n"
                 response += "\n"
