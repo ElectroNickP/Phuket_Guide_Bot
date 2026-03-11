@@ -28,17 +28,18 @@ router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
 
 class AdminStates(StatesGroup):
-    waiting_for_sheet_url = State()
-    waiting_for_sea_sheet_url = State()
-    waiting_for_guide_name = State()
+    waiting_for_spreadsheet_id = State()
+    waiting_for_sea_spreadsheet_id = State()
+    waiting_for_monitor_username = State()
+    waiting_for_land_monitor_username = State()
     waiting_for_guide_name_sea = State()
 
 @router.message(F.text == "🔗 Сменить таблицу")
 async def cmd_set_sheet_kb(message: types.Message, state: FSMContext):
     await message.answer("📝 Пришли мне URL или ID новой Google таблицы:")
-    await state.set_state(AdminStates.waiting_for_sheet_url)
+    await state.set_state(AdminStates.waiting_for_spreadsheet_id)
 
-@router.message(AdminStates.waiting_for_sheet_url)
+@router.message(AdminStates.waiting_for_spreadsheet_id)
 async def process_sheet_url(message: types.Message, state: FSMContext):
     raw_input = message.text
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw_input)
@@ -69,9 +70,9 @@ async def process_sheet_url(message: types.Message, state: FSMContext):
 @router.message(F.text == "🔗 Сменить таблицу (Море)")
 async def cmd_set_sea_sheet_kb(message: types.Message, state: FSMContext):
     await message.answer("📝 Пришли мне URL или ID новой Google таблицы (ПЛАН НА МОРЕ):")
-    await state.set_state(AdminStates.waiting_for_sea_sheet_url)
+    await state.set_state(AdminStates.waiting_for_sea_spreadsheet_id)
 
-@router.message(AdminStates.waiting_for_sea_sheet_url)
+@router.message(AdminStates.waiting_for_sea_spreadsheet_id)
 async def process_sea_sheet_url(message: types.Message, state: FSMContext):
     raw_input = message.text
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw_input)
@@ -127,9 +128,9 @@ async def cmd_logs_kb(message: types.Message):
 @router.message(F.text == "👁 Мониторинг гидов")
 async def cmd_monitor_guides(message: types.Message, state: FSMContext):
     await message.answer("👥 Введи username гида (через @), чье расписание ты хочешь посмотреть:")
-    await state.set_state(AdminStates.waiting_for_guide_name)
+    await state.set_state(AdminStates.waiting_for_monitor_username)
 
-@router.message(AdminStates.waiting_for_guide_name)
+@router.message(AdminStates.waiting_for_monitor_username)
 async def process_guide_monitor(message: types.Message, state: FSMContext):
     target_username = message.text.replace("@", "").strip()
     
@@ -168,6 +169,11 @@ async def process_guide_monitor(message: types.Message, state: FSMContext):
 async def cmd_monitor_sea_guides(message: types.Message, state: FSMContext):
     await message.answer("🌊 Введи username гида (через @), чей ПЛАН НА МОРЕ ты хочешь посмотреть:")
     await state.set_state(AdminStates.waiting_for_guide_name_sea)
+
+@router.message(F.text == "🚐 Мониторинг суши")
+async def cmd_monitor_land(message: types.Message, state: FSMContext):
+    await message.answer("🚐 Введи username гида (через @), чей ПЛАН НА СУШЕ ты хочешь посмотреть:")
+    await state.set_state(AdminStates.waiting_for_land_monitor_username)
 
 @router.message(AdminStates.waiting_for_guide_name_sea)
 async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
@@ -211,6 +217,63 @@ async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
         await message.answer(f"❌ План на море для @{target_username} на сегодня/завтра не найден.")
     
     await state.clear()
+
+@router.message(AdminStates.waiting_for_land_monitor_username)
+async def process_guide_monitor_land(message: types.Message, state: FSMContext):
+    username = message.text.replace("@", "").strip()
+    await state.clear()
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Сегодня", callback_data=f"admin_land_today_{username}")
+    builder.button(text="Завтра", callback_data=f"admin_land_tomorrow_{username}")
+    builder.adjust(2)
+    
+    await message.answer(f"🚐 План на суше для @{username}:", reply_markup=builder.as_markup())
+
+@router.callback_query(F.data.startswith("admin_land_"))
+async def process_admin_land_selection(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    # data is admin_land_[today|tomorrow]_[username]
+    day = parts[2]
+    username = parts[3]
+    
+    is_today = day == "today"
+    target_date = datetime.date.today() if is_today else datetime.date.today() + datetime.timedelta(days=1)
+    
+    await callback.answer(f"Загружаю...")
+    plans = await sea_plan_service.get_guide_land_plan(username, target_date)
+    
+    if not plans:
+        await callback.message.answer(f"🚐 План на суше для @{username} не найден на {target_date.strftime('%d.%m')}.")
+        return
+
+    for plan in plans:
+        response = f"🚐 <b>ADMIN VIEW: @{username}</b>\n"
+        response += f"<b>JOB ORDER: {plan['program']}</b>\n"
+        response += f"📅 <b>DATE:</b> {plan['date']}\n\n"
+        
+        if plan['guides']:
+            response += "👤 <b>GUIDE(S):</b>\n"
+            for g in plan['guides']:
+                response += f"• {g['full_info']} (P/U: {g['pickup_time']} @ {g['pickup_location']})\n"
+            response += "\n"
+            
+        if plan['bus']:
+            response += f"🚌 <b>BUS:</b> <code>{plan['bus']}</code>\n"
+        if plan['driver']:
+            response += f"👨‍✈️ <b>DRIVER:</b> {plan['driver']}\n"
+        
+        if plan['guests']:
+            response += "\n👥 <b>GUEST LIST:</b>\n"
+            for i, g in enumerate(plan['guests'], 1):
+                response += f"{i}. <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
+                response += f"   <b>Hotel:</b> {g['hotel']} (RM: {g['room']})\n"
+                response += f"   <b>Name:</b> <code>{g['name']}</code>\n"
+                if g['phone'] and g['phone'] != "-":
+                    response += f"   <b>Phone:</b> <code>{g['phone']}</code>\n"
+                response += "\n"
+        
+        await callback.message.answer(response, parse_mode="HTML")
 
 @router.message(F.text == "📊 Статистика")
 async def cmd_stats_kb(message: types.Message):

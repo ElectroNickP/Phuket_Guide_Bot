@@ -3,7 +3,7 @@ from aiogram.filters import Command
 from services.google_sheets import google_sheets
 from services.sea_plan import sea_plan_service
 from database.db import update_user_activity
-from utils.keyboards import get_schedule_keyboard, get_sea_plan_keyboard
+from utils.keyboards import get_schedule_keyboard, get_sea_plan_keyboard, get_land_plan_keyboard
 from loguru import logger
 import datetime
 
@@ -60,9 +60,12 @@ async def process_schedule_query(callback: types.CallbackQuery):
     await update_user_activity(callback.from_user.id, action)
 
 @router.message(F.text == "🌊 План на море")
-async def cmd_sea_plan_buttons(message: types.Message):
-    """Show sea plan buttons"""
-    await message.answer("🌊 На какой день ты хочешь посмотреть план на море?", reply_markup=get_sea_plan_keyboard())
+async def cmd_sea_plan(message: types.Message):
+    await message.answer("Выберите день для просмотра плана на море:", reply_markup=get_sea_plan_keyboard())
+
+@router.message(F.text == "🚐 План на суше")
+async def cmd_land_plan(message: types.Message):
+    await message.answer("Выберите день для просмотра плана на суше:", reply_markup=get_land_plan_keyboard())
 
 @router.callback_query(F.data.startswith("sea_"))
 async def process_sea_query(callback: types.CallbackQuery):
@@ -204,3 +207,52 @@ async def process_guest_list_guide(callback: types.CallbackQuery):
             response += "\n"
     
     await callback.message.answer(response, parse_mode="HTML")
+
+@router.callback_query(F.data.startswith("land_"))
+async def process_land_plan_guide(callback: types.CallbackQuery):
+    is_today = callback.data == "land_today"
+    target_date = datetime.date.today() if is_today else datetime.date.today() + datetime.timedelta(days=1)
+    date_str = target_date.strftime("%d.%m")
+
+    username = callback.from_user.username
+    if not username:
+        await callback.answer("Для работы требуется @username в Telegram.", show_alert=True)
+        return
+
+    await callback.answer(f"Загружаю план на суше ({date_str})...")
+    
+    plans = await sea_plan_service.get_guide_land_plan(username, target_date)
+    
+    if not plans:
+        await callback.message.answer(f"🚐 <b>План на суше ({date_str})</b>\n\nНа этот день ваших заказов не найдено.", parse_mode="HTML")
+        return
+
+    for plan in plans:
+        response = f"🚐 <b>JOB ORDER: {plan['program']}</b>\n"
+        response += f"📅 <b>DATE:</b> {plan['date']}\n\n"
+        
+        if plan['guides']:
+            response += "👤 <b>GUIDE(S):</b>\n"
+            for g in plan['guides']:
+                me_tag = " (ВЫ)" if g['is_me'] else ""
+                response += f"• {g['full_info']}{me_tag} (P/U: {g['pickup_time']} @ {g['pickup_location']})\n"
+            response += "\n"
+            
+        if plan['bus']:
+            response += f"🚌 <b>BUS:</b> <code>{plan['bus']}</code>\n"
+        if plan['driver']:
+            response += f"👨‍✈️ <b>DRIVER:</b> {plan['driver']}\n"
+        
+        if plan['guests']:
+            response += "\n👥 <b>GUEST LIST:</b>\n"
+            for i, g in enumerate(plan['guests'], 1):
+                response += f"{i}. <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
+                response += f"   <b>Hotel:</b> {g['hotel']} (RM: {g['room']})\n"
+                response += f"   <b>Name:</b> <code>{g['name']}</code>\n"
+                if g['phone'] and g['phone'] != "-":
+                    response += f"   <b>Phone:</b> <code>{g['phone']}</code>\n"
+                if g['remarks'] and g['remarks'] != "-":
+                    response += f"   <b>Remarks:</b> {g['remarks']}\n"
+                response += "\n"
+        
+        await callback.message.answer(response, parse_mode="HTML")

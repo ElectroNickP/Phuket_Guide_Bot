@@ -190,7 +190,132 @@ class SeaPlanService:
                 }
                 result_plans.append(formatted_plan)
         
-        return result_plans if result_plans else None
+    async def get_guide_land_plan(self, username: str, target_date: datetime.date):
+        """
+        Parses the Land Joined Tours section for a specific guide.
+        """
+        sheet = await self.get_date_worksheet(target_date)
+        if not sheet:
+            return None
+            
+        all_values = await asyncio.to_thread(sheet.get_all_values)
+        
+        land_start = -1
+        for i, row in enumerate(all_values):
+            row_str = " ".join([str(v) for v in row if v])
+            if 'JOB ORDER - LAND JOINED TOURS' in row_str:
+                land_start = i
+                break
+        
+        if land_start == -1:
+            return None
+
+        # Blocks will store data for each "Bus"
+        blocks = []
+        current_block = None
+        
+        username_lower = username.lower()
+        
+        # We need to scan for all guide identifiers to strictly filter them out from guest lists
+        all_guide_identifiers = set()
+        for i in range(land_start + 1, len(all_values)):
+            row = all_values[i]
+            if len(row) < 8: continue
+            col1 = row[1].strip()
+            col7 = row[7].strip()
+            if '@' in col1:
+                if col7: all_guide_identifiers.add(col7.lower())
+                uname_match = re.search(r'@(\w+)', col1)
+                if uname_match: all_guide_identifiers.add(uname_match.group(1).lower())
+
+        for i in range(land_start + 1, len(all_values)):
+            row = all_values[i]
+            if len(row) < 16: continue
+            
+            col1 = row[1].strip() # Agent / Guide Handle
+            col2 = row[2].strip() # Voucher
+            col3 = row[3].strip() # P/U Time / Bus No
+            col4 = row[4].strip() # Hotel / Program
+            col7 = row[7].strip() # Guest Name / Guide Short Name
+            
+            # 1. Detect Program/Bus Header (e.g. "Krabi b1", "Khao lak b2")
+            # Logic: Col 4 contains " b" followed by digits, and Col 1 is NOT a guide row
+            if col4 and re.search(r' b\d+', col4) and not ('@' in col1):
+                if current_block:
+                    blocks.append(current_block)
+                current_block = {
+                    "program": col4,
+                    "date": target_date.strftime("%d.%m"),
+                    "guides": [],
+                    "bus": None,
+                    "driver": None,
+                    "guests": [],
+                    "is_assigned": False
+                }
+                continue
+            
+            if not current_block:
+                continue
+
+            # 2. Identify Guide Row
+            if '@' in col1:
+                is_me = False
+                uname_match = re.search(r'@(\w+)', col1)
+                if uname_match and uname_match.group(1).lower() == username_lower:
+                    is_me = True
+                    current_block["is_assigned"] = True
+                
+                # Extract Pickup Time from Col 3
+                pu_time = col3
+                if ' ' in pu_time: pu_time = pu_time.split(' ')[0]
+                
+                current_block["guides"].append({
+                    "full_info": col1,
+                    "short_name": col7,
+                    "pickup_time": pu_time,
+                    "pickup_location": col4,
+                    "is_me": is_me
+                })
+                continue
+
+            # 3. Identify Bus/Driver Row
+            if 'Bus' in col3 or (col2 and 'Bus' in col2):
+                current_block["bus"] = col3 if 'Bus' in col3 else col2
+                current_block["driver"] = col7
+                continue
+
+            # 4. Identify Guest Row
+            # Logic: Col 7 is not empty and not in the guide identifier set
+            if col7 and col7.lower() not in all_guide_identifiers:
+                # Calculate Pax (Cols 9, 10, 11)
+                try:
+                    pax_a = int(row[9]) if row[9].isdigit() else 0
+                    pax_c = int(row[10]) if row[10].isdigit() else 0
+                    pax_i = int(row[11]) if row[11].isdigit() else 0
+                    # For land tours, we often show it as A/C/I
+                    pax_str = f"{pax_a}/{pax_c}/{pax_i}"
+                    total_pax = pax_a + pax_c + pax_i
+                    if total_pax == 0: continue # Skip zero pax rows
+                except (ValueError, IndexError):
+                    continue
+
+                current_block["guests"].append({
+                    "voucher": col2 or "N/A",
+                    "pickup": col3,
+                    "hotel": col4,
+                    "room": row[6].strip() or "-",
+                    "name": col7,
+                    "phone": row[8].strip() or "-",
+                    "pax": pax_str,
+                    "remarks": row[15].strip() if len(row) > 15 else "-"
+                })
+
+        if current_block:
+            blocks.append(current_block)
+
+        # Filter blocks where the guide is assigned
+        my_blocks = [b for b in blocks if b["is_assigned"]]
+        return my_blocks if my_blocks else None
 
     async def get_guest_list(self, target_date: datetime.date, program_names: list[str]) -> list[dict]:
         """

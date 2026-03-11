@@ -3,16 +3,18 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton(text="📅 Моё расписание"), KeyboardButton(text="🌊 План на море")],
-        [KeyboardButton(text="👤 Мой статус"), KeyboardButton(text="📝 Обратная связь")]
+        [KeyboardButton(text="🚐 План на суше"), KeyboardButton(text="👤 Мой статус")],
+        [KeyboardButton(text="📝 Обратная связь")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 def get_admin_menu_keyboard():
     keyboard = [
         [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="🌊 Мониторинг моря")],
-        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="⏱ Интервал")],
+        [KeyboardButton(text="🚐 Мониторинг суши"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="⏱ Интервал"), KeyboardButton(text="📋 Логи")],
         [KeyboardButton(text="🔗 Сменить таблицу"), KeyboardButton(text="🔗 Сменить таблицу (Море)")],
-        [KeyboardButton(text="📋 Логи"), KeyboardButton(text="🔙 Главное меню")]
+        [KeyboardButton(text="🔙 Главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -41,5 +43,12 @@ def get_sea_plan_keyboard():
     buttons = [
         [InlineKeyboardButton(text="Сегодня", callback_data="sea_today")],
         [InlineKeyboardButton(text="Завтра", callback_data="sea_tomorrow")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_land_plan_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="Сегодня", callback_data="land_today")],
+        [InlineKeyboardButton(text="Завтра", callback_data="land_tomorrow")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
