@@ -2,6 +2,7 @@ from aiogram import Router, types, F, Bot
 from aiogram.filters import Command, BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database.db import AsyncSessionLocal
 from database.models import User, AppSettings
 from services.google_sheets import google_sheets
