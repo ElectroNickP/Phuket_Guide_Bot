@@ -354,6 +354,7 @@ class SeaPlanService:
                     "name": r[7].strip(),
                     "phone": r[8].strip(),
                     "pax": r[12].strip(),
+                    "cot": r[14].strip() if len(r) > 14 else "0",
                     "remarks": r[15].strip(),
                 })
                 

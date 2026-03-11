@@ -199,6 +199,7 @@ async def process_guest_list_guide(callback: types.CallbackQuery):
             response += f"  • <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
             if g['pickup']:
                 response += f"    <b>Pickup:</b> {g['pickup']}\n"
+            response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
             response += f"    <b>Hotel:</b> {g['hotel']} (RM: {g['room']})\n"
             response += f"    <b>Name:</b> <code>{g['name']}</code>\n"
             if g['phone']:
