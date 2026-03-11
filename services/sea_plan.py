@@ -217,26 +217,12 @@ class SeaPlanService:
                 continue
             
             all_values = await asyncio.to_thread(sheet.get_all_values)
-            in_boat_section = False
-            for i, row in enumerate(all_values):
-                if len(row) < 16:
+            for row in all_values:
+                if len(row) < 8:
                     continue
-                
-                row_program = row[4].strip()
-                
-                if not in_boat_section:
-                    if "COMEBACK BOATS" in row_program.upper():
-                        in_boat_section = True
-                    continue
-                
-                # STOP AT SUMMARY ROWS (for consistency and clean monitoring)
-                if "TOTAL" in row_program.upper() or "JOB ORDER" in row_program.upper():
-                    break
-
                 guide_str = row[7].strip()
                 if not guide_str or '@' not in guide_str:
                     continue
-                
                 matches = re.findall(r'@(\w+)', guide_str)
                 for uname in matches:
                     all_usernames.add(uname.lower())
