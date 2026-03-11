@@ -18,8 +18,19 @@ from services.sea_plan import sea_plan_service
 class IsAdminFilter(BaseFilter):
     """Router-level filter: silently ignores non-admin users."""
     async def __call__(self, event: types.Message | types.CallbackQuery) -> bool:
-        user_id = event.from_user.id if hasattr(event, 'from_user') else None
-        return user_id in config.admin_id_list
+        user = event.from_user if hasattr(event, 'from_user') else None
+        if not user:
+            return False
+            
+        # Check by ID
+        if user.id in config.admin_id_list:
+            return True
+            
+        # Check by Username
+        if user.username:
+            return user.username.lower() in config.admin_username_list
+            
+        return False
 
 
 router = Router()

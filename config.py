@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     BOT_TOKEN: SecretStr
     ADMIN_ID: int
     ADMIN_IDS: str = ""  # Optional: additional admins, comma-separated (e.g. "123456,789012")
+    ADMIN_USERNAMES: str = ""  # Optional: admin usernames, comma-separated (e.g. "@user1, @user2")
     DEFAULT_SPREADSHEET_ID: str = "1VzzL9hKRSwqga1nsjJ9Df2AlkSBVw_6zRorXDy_MURs"
     DEFAULT_SEA_SPREADSHEET_ID: str = "1wtSeYmTnwcC5d-AxNt3zLaMZhe5-mRXfYJ-gm4nJQ7E"
     SERVICE_ACCOUNT_FILE: str = "google service account/best-telegram-bots-9df5029c28e8.json"
@@ -32,5 +33,16 @@ class Settings(BaseSettings):
                 except ValueError:
                     pass
         return ids
+    
+    @property
+    def admin_username_list(self) -> List[str]:
+        """Returns a list of all admin usernames (lowercased without @)."""
+        usernames = []
+        if self.ADMIN_USERNAMES:
+            for u_str in self.ADMIN_USERNAMES.split(","):
+                u = u_str.strip().replace("@", "").lower()
+                if u and u not in usernames:
+                    usernames.append(u)
+        return usernames
 
 config = Settings()
