@@ -108,8 +108,10 @@ class SeaPlanService:
         # 0: Date, 1: Thai Guide/Note, 4: Program, 5: Pax, 7: Guide, 13: Pier, 15: Boat
         for i, row in enumerate(all_values):
             # 1. Stop Condition Check (Must happen BEFORE len check, as TOTAL row is short)
+            # We enforce i > 250 because the very first row is 'JOB ORDER - SEA TOURS' 
+            # and guest lists can occasionally have 'TOTAL' or 'JOB ORDER' in remarks.
             row_program_raw = row[4].strip() if len(row) > 4 else ""
-            if row_program_raw in ("TOTAL",) or row_program_raw.startswith("JOB ORDER"):
+            if i > 250 and (row_program_raw == "TOTAL" or row_program_raw.startswith("JOB ORDER")):
                 logger.debug(f"Reached end of boat schedule at row {i}: {row_program_raw}")
                 break
 
