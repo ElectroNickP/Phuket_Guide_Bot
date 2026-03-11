@@ -103,30 +103,29 @@ class SeaPlanService:
         current_boat = None
         current_pier = None
         current_thai_guide = None
-        in_boat_section = False
         
         # Columns (0-indexed):
-        # 0: Date, 1: Thai Guide/Note, 4: Program, 5: Pax, 6: Grand Total, 7: Guide, 13: Pier, 15: Boat
+        # 0: Date, 1: Thai Guide/Note, 4: Program, 5: Pax, 7: Guide, 13: Pier, 15: Boat
         for i, row in enumerate(all_values):
             if len(row) < 16: continue
             
             row_program = row[4].strip()
-            row_thai = row[1].strip()
             row_boat = row[15].strip()
             row_pier = row[13].strip()
+            row_thai = row[1].strip()
             row_date = row[0].strip()
 
-            # SECTION DELIMITER: Only start boat parsing after "COMEBACK BOATS"
-            if not in_boat_section:
-                if "COMEBACK BOATS" in row_program.upper():
-                    in_boat_section = True
-                continue
-
-            # STOP CONDITION: break if we hit the "TOTAL" summary row or next major section
-            if "TOTAL" in row_program.upper() or "JOB ORDER" in row_program.upper():
-                logger.debug(f"Reached section end at row {i}: {row_program}")
+            # STOP CONDITION: break when we reach the summary/private sections
+            # "TOTAL" comes after all real boat programs and before private tours
+            if row_program in ("TOTAL",) or row_program.startswith("JOB ORDER"):
+                logger.debug(f"Reached end of boat schedule at row {i}: {row_program}")
                 break
 
+            # COMEBACK BOATS is a section separator — skip it, don't break
+            if "COMEBACK BOATS" in row_program.upper():
+                continue
+
+            # Real boat rows have a boat name in col 15
             if row_boat:
                 current_boat = row_boat
                 current_pier = row_pier
@@ -142,7 +141,7 @@ class SeaPlanService:
             # Skip empty programs without guides
             if not prog_name and not guide_str:
                 continue
-            
+
             boat_key = f"{current_pier}_{current_boat}"
             if boat_key not in boats_data:
                 boats_data[boat_key] = {
