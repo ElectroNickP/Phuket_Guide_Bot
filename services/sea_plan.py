@@ -103,30 +103,29 @@ class SeaPlanService:
         current_boat = None
         current_pier = None
         current_thai_guide = None
+        in_boat_section = False
         
         # Columns (0-indexed):
         # 0: Date, 1: Thai Guide/Note, 4: Program, 5: Pax, 6: Grand Total, 7: Guide, 13: Pier, 15: Boat
         for i, row in enumerate(all_values):
             if len(row) < 16: continue
-            if i == 0: continue  # Skip header row
             
-            # Identify row type: is it a header row for a boat?
+            row_program = row[4].strip()
+            row_thai = row[1].strip()
             row_boat = row[15].strip()
             row_pier = row[13].strip()
-            row_thai = row[1].strip()
             row_date = row[0].strip()
-            row_program = row[4].strip()
 
-            # STOP CONDITION: break if we hit the summary or private tour sections
-            # WE ONLY APPLY THIS IF:
-            # 1. We have already found a boat (group is started)
-            # 2. This current row does NOT have a new boat name (part of the same group or the end)
-            # 3. We hit a keyword like TOTAL, JOB ORDER etc.
-            stop_keywords = ["BOOKED", "FREE", "TOTAL", "ENHANCED", "STANDARD", "SUPERIOR", "JOB ORDER"]
-            if current_boat and not row_boat and (any(k in row_thai.upper() for k in stop_keywords) or \
-                                               any(k in row_program.upper() for k in stop_keywords)):
-                logger.debug(f"Skipping summary row {i}: {row_thai} | {row_program}")
+            # SECTION DELIMITER: Only start boat parsing after "COMEBACK BOATS"
+            if not in_boat_section:
+                if "COMEBACK BOATS" in row_program.upper():
+                    in_boat_section = True
                 continue
+
+            # STOP CONDITION: break if we hit the "TOTAL" summary row or next major section
+            if "TOTAL" in row_program.upper() or "JOB ORDER" in row_program.upper():
+                logger.debug(f"Reached section end at row {i}: {row_program}")
+                break
 
             if row_boat:
                 current_boat = row_boat
@@ -140,6 +139,7 @@ class SeaPlanService:
             prog_name = row[4].strip()
             pax_str = row[5].strip()
 
+            # Skip empty programs without guides
             if not prog_name and not guide_str:
                 continue
             
@@ -217,24 +217,21 @@ class SeaPlanService:
                 continue
             
             all_values = await asyncio.to_thread(sheet.get_all_values)
-            current_boat_detect = None
+            in_boat_section = False
             for i, row in enumerate(all_values):
                 if len(row) < 16:
                     continue
-                if i == 0: continue
                 
-                row_boat = row[15].strip()
-                row_thai = row[1].strip()
                 row_program = row[4].strip()
                 
-                if row_boat:
-                    current_boat_detect = row_boat
-                
-                # SKIP SUMMARY ROWS (for consistency and clean monitoring)
-                stop_keywords = ["BOOKED", "FREE", "TOTAL", "ENHANCED", "STANDARD", "SUPERIOR", "JOB ORDER"]
-                if current_boat_detect and not row_boat and (any(k in row_thai.upper() for k in stop_keywords) or \
-                                                           any(k in row_program.upper() for k in stop_keywords)):
+                if not in_boat_section:
+                    if "COMEBACK BOATS" in row_program.upper():
+                        in_boat_section = True
                     continue
+                
+                # STOP AT SUMMARY ROWS (for consistency and clean monitoring)
+                if "TOTAL" in row_program.upper() or "JOB ORDER" in row_program.upper():
+                    break
 
                 guide_str = row[7].strip()
                 if not guide_str or '@' not in guide_str:
