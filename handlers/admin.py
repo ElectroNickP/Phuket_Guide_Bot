@@ -11,6 +11,8 @@ from loguru import logger
 from config import config
 import re
 import datetime
+import html
+from services.sea_plan import sea_plan_service
 
 
 class IsAdminFilter(BaseFilter):
@@ -113,7 +115,7 @@ async def cmd_logs_kb(message: types.Message):
             log_text = "..." + log_text[-3500:]
         
         await message.answer(
-            f"📋 <b>Последние 30 строк логов:</b>\n\n<code>{log_text}</code>",
+            f"📋 <b>Последние 30 строк логов:</b>\n\n<code>{html.escape(log_text)}</code>",
             parse_mode="HTML"
         )
     except FileNotFoundError:
@@ -170,8 +172,6 @@ async def cmd_monitor_sea_guides(message: types.Message, state: FSMContext):
 @router.message(AdminStates.waiting_for_guide_name_sea)
 async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
     target_username = message.text.replace("@", "").strip()
-    
-    from services.sea_plan import sea_plan_service
     
     # Try today and tomorrow
     today = datetime.datetime.now().date()
@@ -305,7 +305,8 @@ async def cmd_admin_legacy(message: types.Message):
 async def process_guest_list_admin(callback: types.CallbackQuery):
     try:
         # data is guestlist_admin_dd.mm_username
-        parts = callback.data.split('_')
+        # Split but only for the first 3 underscores to keep the username (which might have underscores) intact
+        parts = callback.data.split('_', 3)
         date_str = parts[2]
         tgt_username = parts[3]
         target_date = datetime.datetime.strptime(f"{date_str}.{datetime.date.today().year}", "%d.%m.%Y").date()
