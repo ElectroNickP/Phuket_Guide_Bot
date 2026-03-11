@@ -232,7 +232,7 @@ async def process_guide_monitor_land(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_land_"))
 async def process_admin_land_selection(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
+    parts = callback.data.split("_", 3)
     # data is admin_land_[today|tomorrow]_[username]
     day = parts[2]
     username = parts[3]
