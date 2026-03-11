@@ -125,8 +125,8 @@ class SeaPlanService:
             stop_keywords = ["BOOKED", "FREE", "TOTAL", "ENHANCED", "STANDARD", "SUPERIOR", "JOB ORDER"]
             if current_boat and not row_boat and (any(k in row_thai.upper() for k in stop_keywords) or \
                                                any(k in row_program.upper() for k in stop_keywords)):
-                logger.debug(f"Stop condition met at row {i}: {row_thai} | {row_program}")
-                break
+                logger.debug(f"Skipping summary row {i}: {row_thai} | {row_program}")
+                continue
 
             if row_boat:
                 current_boat = row_boat
@@ -230,11 +230,11 @@ class SeaPlanService:
                 if row_boat:
                     current_boat_detect = row_boat
                 
-                # STOP CONDITION (for consistency and clean monitoring)
+                # SKIP SUMMARY ROWS (for consistency and clean monitoring)
                 stop_keywords = ["BOOKED", "FREE", "TOTAL", "ENHANCED", "STANDARD", "SUPERIOR", "JOB ORDER"]
                 if current_boat_detect and not row_boat and (any(k in row_thai.upper() for k in stop_keywords) or \
                                                            any(k in row_program.upper() for k in stop_keywords)):
-                    break
+                    continue
 
                 guide_str = row[7].strip()
                 if not guide_str or '@' not in guide_str:
