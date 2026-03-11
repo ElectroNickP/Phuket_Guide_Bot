@@ -40,7 +40,7 @@ async def cmd_start(message: types.Message, bot: Bot):
                     try:
                         sheet = await google_sheets.get_current_month_sheet()
                         if sheet:
-                            staff, freelance = google_sheets.parse_guides(sheet)
+                            staff, freelance = await google_sheets.parse_guides(sheet)
                             all_guides = staff + freelance
                             now = datetime.datetime.now()
                             tomorrow = now + datetime.timedelta(days=1)
@@ -61,7 +61,7 @@ async def cmd_start(message: types.Message, bot: Bot):
             await update_user_activity(message.from_user.id, "start")
         
         logger.debug(f"Determining keyboard for {message.from_user.id}")
-        is_admin = (message.from_user.id == config.ADMIN_ID)
+        is_admin = (message.from_user.id in config.admin_id_list)
         logger.debug(f"User {message.from_user.id} is_admin: {is_admin} (Config ADMIN_ID: {config.ADMIN_ID})")
         
         if is_admin:

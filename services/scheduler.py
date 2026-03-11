@@ -18,7 +18,7 @@ async def cache_user_schedule(session, bot: Bot, user: User, sheet, all_guides_s
         return
 
     # Get current value from sheet
-    current_program = google_sheets.get_guide_schedule(sheet, guide_info['row'], day=day) or "---"
+    current_program = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=day) or "---"
     
     # Check last cached value
     date_normalized = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -75,7 +75,7 @@ async def check_schedule_changes(bot: Bot):
             logger.warning("Could not find sheet for change check.")
             return
 
-        staff, freelance = google_sheets.parse_guides(sheet)
+        staff, freelance = await google_sheets.parse_guides(sheet)
         all_guides_sheet = staff + freelance
         
         today = datetime.datetime.now()

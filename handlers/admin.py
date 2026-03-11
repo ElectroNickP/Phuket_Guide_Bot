@@ -1,5 +1,5 @@
 from aiogram import Router, types, F, Bot
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database.db import AsyncSessionLocal
@@ -11,7 +11,18 @@ from config import config
 import re
 import datetime
 
+
+class IsAdminFilter(BaseFilter):
+    """Router-level filter: silently ignores non-admin users."""
+    async def __call__(self, event: types.Message | types.CallbackQuery) -> bool:
+        user_id = event.from_user.id if hasattr(event, 'from_user') else None
+        return user_id in config.admin_id_list
+
+
 router = Router()
+# Apply admin guard to ALL message and callback handlers in this router
+router.message.filter(IsAdminFilter())
+router.callback_query.filter(IsAdminFilter())
 
 class AdminStates(StatesGroup):
     waiting_for_sheet_url = State()
@@ -111,7 +122,7 @@ async def process_guide_monitor(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    staff, freelance = google_sheets.parse_guides(sheet)
+    staff, freelance = await google_sheets.parse_guides(sheet)
     all_guides = staff + freelance
     guide_info = next((g for g in all_guides if g['username'].lower() == target_username.lower()), None)
 
@@ -122,8 +133,8 @@ async def process_guide_monitor(message: types.Message, state: FSMContext):
         today = datetime.datetime.now().day
         tomorrow = (datetime.datetime.now() + datetime.timedelta(days=1)).day
         
-        sched_today = google_sheets.get_guide_schedule(sheet, guide_info['row'], day=today)
-        sched_tomorrow = google_sheets.get_guide_schedule(sheet, guide_info['row'], day=tomorrow)
+        sched_today = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=today)
+        sched_tomorrow = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=tomorrow)
         
         type_str = "Штат" if guide_info['type'] == "staff" else "Фриланс"
         

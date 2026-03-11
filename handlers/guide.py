@@ -24,7 +24,7 @@ async def process_schedule_query(callback: types.CallbackQuery):
         await callback.message.edit_text("❌ Не удалось найти лист с расписанием на текущий месяц.")
         return
 
-    staff, freelance = google_sheets.parse_guides(sheet)
+    staff, freelance = await google_sheets.parse_guides(sheet)
     all_guides = staff + freelance
     
     user_username = callback.from_user.username
@@ -44,7 +44,7 @@ async def process_schedule_query(callback: types.CallbackQuery):
         target_date += datetime.timedelta(days=1)
     
     day = target_date.day
-    schedule = google_sheets.get_guide_schedule(sheet, guide_info['row'], day=day)
+    schedule = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=day)
 
     date_str = "Завтра" if is_tomorrow else "Сегодня"
     response = (
@@ -122,7 +122,7 @@ async def cmd_status(message: types.Message):
         await message.answer("❌ Нет связи с таблицей.")
         return
 
-    staff, freelance = google_sheets.parse_guides(sheet)
+    staff, freelance = await google_sheets.parse_guides(sheet)
     
     user_username = message.from_user.username
     is_staff = any(g['username'].lower() == user_username.lower() for g in staff)

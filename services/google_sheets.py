@@ -1,3 +1,4 @@
+import asyncio
 import gspread
 from google.oauth2.service_account import Credentials
 from loguru import logger
@@ -36,13 +37,14 @@ class GoogleSheetsService:
         if not self._spreadsheet or self._current_spreadsheet_id != sheet_id:
             logger.info(f"Opening spreadsheet: {sheet_id}")
             try:
-                self._spreadsheet = self.client.open_by_key(sheet_id)
+                # Run blocking gspread call in a thread pool
+                self._spreadsheet = await asyncio.to_thread(
+                    self.client.open_by_key, sheet_id
+                )
                 self._current_spreadsheet_id = sheet_id
                 logger.info(f"Successfully loaded spreadsheet: {self._spreadsheet.title}")
             except Exception as e:
                 logger.error(f"Failed to open spreadsheet {sheet_id}: {e}")
-                # Don't raise, let the caller handle None if needed, 
-                # or return the stale version if it exists
                 if self._spreadsheet and self._current_spreadsheet_id == sheet_id:
                     logger.warning("Using stale spreadsheet instance due to connection error.")
                 else:
@@ -54,13 +56,17 @@ class GoogleSheetsService:
         Finds the sheet for the current month.
         """
         spreadsheet = await self.get_spreadsheet()
+        if not spreadsheet:
+            return None
+
         now = datetime.datetime.now()
         month = f"{now.month:02d}"
         year_short = str(now.year)[2:]
         
         possible_names = [f"{month}.{year_short}", f"{month}/{year_short}"]
         
-        all_sheets = spreadsheet.worksheets()
+        # Run blocking call in thread pool
+        all_sheets = await asyncio.to_thread(spreadsheet.worksheets)
         for sheet in all_sheets:
             if sheet.title in possible_names:
                 return sheet
@@ -73,18 +79,20 @@ class GoogleSheetsService:
         logger.error(f"Sheet for month {month} not found!")
         return None
 
-    def parse_guides(self, sheet):
+    async def parse_guides(self, sheet):
         """
         Parses Column A to identify staff and freelance guides based on markers:
         - Staff start after "ГИДЫ:"
         - Staff end at "ВЫХОДНЫЕ"
         - Freelance start after "ФРИЛАНС"
         """
-        col_a = sheet.col_values(1)
+        # Run blocking call in thread pool
+        col_a = await asyncio.to_thread(sheet.col_values, 1)
+
         staff_guides = []
         freelance_guides = []
         
-        current_section = None # Can be 'staff' or 'freelance'
+        current_section = None  # Can be 'staff' or 'freelance'
         
         for i, value in enumerate(col_a):
             row_idx = i + 1
@@ -122,12 +130,13 @@ class GoogleSheetsService:
         logger.info(f"Parsed {len(staff_guides)} staff and {len(freelance_guides)} freelance guides")
         return staff_guides, freelance_guides
 
-    def get_guide_schedule(self, sheet, guide_row, day=None):
+    async def get_guide_schedule(self, sheet, guide_row, day=None):
         if day is None:
             day = datetime.datetime.now().day
             
         col_idx = 2 + day
-        row_values = sheet.row_values(guide_row)
+        # Run blocking call in thread pool
+        row_values = await asyncio.to_thread(sheet.row_values, guide_row)
         if len(row_values) < col_idx:
             return None
             

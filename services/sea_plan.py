@@ -1,3 +1,4 @@
+import asyncio
 import gspread
 from google.oauth2.service_account import Credentials
 from loguru import logger
@@ -36,7 +37,10 @@ class SeaPlanService:
         if not self._spreadsheet or self._current_spreadsheet_id != sheet_id:
             logger.info(f"Opening Sea Plan spreadsheet: {sheet_id}")
             try:
-                self._spreadsheet = self.client.open_by_key(sheet_id)
+                # Run blocking gspread call in a thread pool
+                self._spreadsheet = await asyncio.to_thread(
+                    self.client.open_by_key, sheet_id
+                )
                 self._current_spreadsheet_id = sheet_id
                 logger.info(f"Successfully loaded Sea Plan: {self._spreadsheet.title}")
             except Exception as e:
@@ -50,30 +54,31 @@ class SeaPlanService:
     async def get_date_worksheet(self, target_date: datetime.date):
         """Finds worksheet matching the date (e.g. '10.03')"""
         spreadsheet = await self.get_spreadsheet()
+        if not spreadsheet:
+            return None
         date_str = target_date.strftime("%d.%m")
         try:
-            return spreadsheet.worksheet(date_str)
+            # Run blocking call in thread pool
+            return await asyncio.to_thread(spreadsheet.worksheet, date_str)
         except gspread.WorksheetNotFound:
-            # Try leading zero fallback if %d.%m is not enough
-            # But %d.%m already has leading zeros
             logger.warning(f"Worksheet {date_str} not found in Sea Plan.")
             return None
 
-    def find_data_bounds(self, all_values):
-        """Locates the start and end rows for guide programs"""
-        start_row = -1
-        end_row = -1
-        
-        for i, row in enumerate(all_values):
-            row_str = " ".join([str(c) for c in row]).upper()
-            if "THAI GUIDE" in row_str and "TT PROGRAMS" in row_str:
-                start_row = i
-                continue
-            if "COMEBACK BOATS" in row_str and start_row != -1:
-                end_row = i
-                break
-        
-        return start_row, end_row
+    def _validate_sheet_columns(self, header_row: list):
+        """
+        Defensive check: warns if expected column positions appear empty.
+        Expected (0-indexed): 4=program, 5=pax, 7=guide, 13=pier, 15=boat
+        """
+        expected = {4: "program", 5: "pax", 7: "guide", 13: "pier", 15: "boat"}
+        if not header_row:
+            logger.warning("Sea Plan sheet header row is empty — cannot validate columns.")
+            return
+        for idx, name in expected.items():
+            if idx >= len(header_row):
+                logger.warning(
+                    f"Sea Plan column {idx} (expected: '{name}') is out of range. "
+                    "Columns may have shifted — verify sheet structure!"
+                )
 
     async def get_guide_sea_plan(self, username: str, target_date: datetime.date):
         """
@@ -83,8 +88,13 @@ class SeaPlanService:
         if not sheet:
             return None
             
-        all_values = sheet.get_all_values()
+        # Run blocking call in thread pool
+        all_values = await asyncio.to_thread(sheet.get_all_values)
         
+        # Defensive column validation on the first non-empty row
+        if all_values:
+            self._validate_sheet_columns(all_values[0])
+
         # boat_id (pier+boat name) -> aggregated_info
         boats_data = {}
         
@@ -114,7 +124,6 @@ class SeaPlanService:
             guide_str = row[7].strip()
             prog_name = row[4].strip()
             pax_str = row[5].strip()
-            grand_pax = row[6].strip() or row[14].strip()
 
             if not prog_name and not guide_str:
                 continue
@@ -128,7 +137,7 @@ class SeaPlanService:
                     "thai_guide": current_thai_guide,
                     "total_pax": 0,
                     "programs": [],
-                    "guides": set(), # Set of (username, full_name)
+                    "guides": set(),
                     "assigned_usernames": set()
                 }
             
@@ -137,7 +146,8 @@ class SeaPlanService:
                 pax_val = 0
                 try:
                     pax_val = int(pax_str)
-                except: pass
+                except (ValueError, TypeError):
+                    pass
                 
                 boats_data[boat_key]["programs"].append({
                     "name": prog_name,
@@ -160,7 +170,6 @@ class SeaPlanService:
         
         for boat_key, data in boats_data.items():
             if username_lower in data["assigned_usernames"]:
-                # Format for handler
                 formatted_plan = {
                     "date": data["date"],
                     "boat": data["boat"],
@@ -168,7 +177,7 @@ class SeaPlanService:
                     "thai_guide": data["thai_guide"],
                     "total_pax": data["total_pax"],
                     "guides_list": sorted(list(data["guides"])),
-                    "programs": data["programs"]  # Return raw list for conditional formatting
+                    "programs": data["programs"]  # Raw list for conditional formatting in handlers
                 }
                 result_plans.append(formatted_plan)
         
