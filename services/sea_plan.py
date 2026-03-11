@@ -107,19 +107,20 @@ class SeaPlanService:
         # Columns (0-indexed):
         # 0: Date, 1: Thai Guide/Note, 4: Program, 5: Pax, 7: Guide, 13: Pier, 15: Boat
         for i, row in enumerate(all_values):
+            # 1. Stop Condition Check (Must happen BEFORE len check, as TOTAL row is short)
+            row_program_raw = row[4].strip() if len(row) > 4 else ""
+            if row_program_raw in ("TOTAL",) or row_program_raw.startswith("JOB ORDER"):
+                logger.debug(f"Reached end of boat schedule at row {i}: {row_program_raw}")
+                break
+
+            # 2. Main Boat Data Check
             if len(row) < 16: continue
             
-            row_program = row[4].strip()
+            row_program = row_program_raw
             row_boat = row[15].strip()
             row_pier = row[13].strip()
             row_thai = row[1].strip()
             row_date = row[0].strip()
-
-            # STOP CONDITION: break when we reach the summary/private sections
-            # "TOTAL" comes after all real boat programs and before private tours
-            if row_program in ("TOTAL",) or row_program.startswith("JOB ORDER"):
-                logger.debug(f"Reached end of boat schedule at row {i}: {row_program}")
-                break
 
             # COMEBACK BOATS is a section separator — skip it, don't break
             if "COMEBACK BOATS" in row_program.upper():
