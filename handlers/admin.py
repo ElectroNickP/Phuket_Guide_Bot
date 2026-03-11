@@ -100,11 +100,25 @@ async def process_sea_sheet_url(message: types.Message, state: FSMContext):
 @router.message(F.text == "📋 Логи")
 async def cmd_logs_kb(message: types.Message):
     try:
-        with open("logs/bot.log", "r") as f:
+        with open("logs/bot.log", "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
-            last_lines = "".join(lines[-15:])
-            await message.answer(f"📋 <b>Последние 15 строк логов:</b>\n\n<code>{last_lines}</code>", parse_mode="HTML")
+        
+        # Show last 30 lines, filter to anything WARNING or above for compact view
+        last_lines = lines[-30:]
+        log_text = "".join(last_lines)
+        
+        # Telegram limit: 4096 chars. Truncate from the start if too long.
+        if len(log_text) > 3500:
+            log_text = "..." + log_text[-3500:]
+        
+        await message.answer(
+            f"📋 <b>Последние 30 строк логов:</b>\n\n<code>{log_text}</code>",
+            parse_mode="HTML"
+        )
+    except FileNotFoundError:
+        await message.answer("⚠️ Файл логов не найден. Бот ещё ничего не записал в файл.")
     except Exception as e:
+        logger.exception(f"Error reading logs: {e}")
         await message.answer(f"❌ Ошибка при чтении логов: {e}")
 
 @router.message(F.text == "👁 Мониторинг гидов")

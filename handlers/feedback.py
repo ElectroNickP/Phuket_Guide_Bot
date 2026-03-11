@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from config import config
 from database.db import update_user_activity
+from loguru import logger
 
 router = Router()
 
@@ -30,11 +31,13 @@ async def process_feedback(message: types.Message, state: FSMContext, bot: Bot):
     )
     
     try:
-        await bot.send_message(config.ADMIN_ID, admin_msg, parse_mode="HTML")
+        # Forward to all admins
+        for admin_id in config.admin_id_list:
+            await bot.send_message(admin_id, admin_msg, parse_mode="HTML")
         await message.answer("✅ Твое сообщение отправлено администратору. Спасибо!")
-        # Track activity
         await update_user_activity(message.from_user.id, "feedback")
     except Exception as e:
+        logger.exception(f"Error sending feedback from {message.from_user.id}: {e}")
         await message.answer("❌ Произошла ошибка при отправке сообщения. Попробуй позже.")
-        
+    
     await state.clear()

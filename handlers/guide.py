@@ -109,7 +109,7 @@ async def process_sea_query(callback: types.CallbackQuery):
         await update_user_activity(callback.from_user.id, action)
         
     except Exception as e:
-        logger.error(f"Error fetching sea plan: {e}")
+        logger.exception(f"Error fetching sea plan for @{user_username}: {e}")
         await callback.message.edit_text("❌ Произошла ошибка при получении плана на море.")
 
 @router.message(F.text == "👤 Мой статус")
