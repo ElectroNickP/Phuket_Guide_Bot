@@ -246,31 +246,62 @@ async def process_admin_sea_guide_select(callback: types.CallbackQuery, state: F
 
 @router.message(F.text == "🚐 Мониторинг суши")
 async def cmd_monitor_land(message: types.Message, state: FSMContext):
-    # Fetch active guides for today and tomorrow
-    today = datetime.datetime.now().date()
-    tomorrow = today + datetime.timedelta(days=1)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📅 Сегодня", callback_data="admland_date_today")
+    builder.button(text="📅 Завтра", callback_data="admland_date_tomorrow")
+    builder.adjust(2)
     
-    msg = await message.answer("🔍 Ищу гидов в наземной программе...")
-    active_guides = await sea_plan_service.get_active_land_guides([today, tomorrow])
+    await message.answer(
+        "🚐 <b>Мониторинг суши</b>\n\nВыберите дату для просмотра списка работающих гидов:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+    await state.clear()
+
+@router.callback_query(F.data.startswith("admland_date_"))
+async def process_admin_land_date_select(callback: types.CallbackQuery, state: FSMContext):
+    is_today = "today" in callback.data
+    target_date = datetime.date.today() if is_today else datetime.date.today() + datetime.timedelta(days=1)
+    date_str = target_date.strftime("%d.%m")
+    
+    await callback.answer(f"Ищу гидов на {date_str}...")
+    active_guides = await sea_plan_service.get_active_land_guides([target_date])
     
     if active_guides:
         builder = InlineKeyboardBuilder()
         for uname in active_guides:
-            builder.button(text=f"👤 @{uname}", callback_data=f"admland_{uname}")
+            builder.button(text=f"👤 @{uname}", callback_data=f"admland_user_{date_str}_{uname}")
         builder.adjust(2)
-        await message.answer(
-            f"🚐 Найдено {len(active_guides)} гидов в наземной программе на сегодня/завтра.\n"
-            "Выбери гида или введи username вручную:",
+        await callback.message.answer(
+            f"🚐 <b>Гиды переведенные на сушу ({date_str}):</b>\n"
+            "Выберите гида для просмотра Job Order:",
+            parse_mode="HTML",
             reply_markup=builder.as_markup()
         )
     else:
-        await message.answer("🚐 В наземной программе на сегодня/завтра гидов не найдено.\nВведи username гида вручную:")
+        await callback.message.answer(
+            f"🚐 На {date_str} активных гидов в наземной программе не найдено.\n"
+            "Вы можете ввести username вручную (например, @username):"
+        )
+        await state.set_state(AdminStates.waiting_for_land_monitor_username)
+        await state.update_data(target_date=target_date.isoformat())
+
+@router.callback_query(F.data.startswith("admland_user_"))
+async def process_admin_land_user_select(callback: types.CallbackQuery):
+    # data: admland_user_{date_str}_{username}
+    parts = callback.data.split("_", 3)
+    date_str = parts[2]
+    username = parts[3]
     
-    await msg.delete()
-    await state.set_state(AdminStates.waiting_for_land_monitor_username)
+    target_date = datetime.datetime.strptime(f"{date_str}.{datetime.date.today().year}", "%d.%m.%Y").date()
+    
+    await callback.answer(f"Загружаю @{username}...")
+    plans = await sea_plan_service.get_guide_land_plan(username, target_date)
+    await _send_admin_land_plans(username, target_date, plans, callback.message)
 
 @router.callback_query(F.data.startswith("admland_"))
-async def process_admin_land_guide_select(callback: types.CallbackQuery, state: FSMContext):
+async def process_admin_land_guide_select_legacy(callback: types.CallbackQuery, state: FSMContext):
+    # Fallback for old buttons if any exist
     username = callback.data.split("_", 1)[1]
     await callback.answer(f"Выбран @{username}")
     
@@ -291,30 +322,27 @@ async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
 @router.message(AdminStates.waiting_for_land_monitor_username)
 async def process_guide_monitor_land(message: types.Message, state: FSMContext):
     username = message.text.replace("@", "").strip()
+    data = await state.get_data()
+    saved_date = data.get("target_date")
+    
     await state.clear()
     
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Сегодня", callback_data=f"admin_land_today_{username}")
-    builder.button(text="Завтра", callback_data=f"admin_land_tomorrow_{username}")
-    builder.adjust(2)
-    
-    await message.answer(f"🚐 План на суше для @{username}:", reply_markup=builder.as_markup())
+    if saved_date:
+        target_date = datetime.date.fromisoformat(saved_date)
+        plans = await sea_plan_service.get_guide_land_plan(username, target_date)
+        await _send_admin_land_plans(username, target_date, plans, message)
+    else:
+        # Fallback to choosing date
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Сегодня", callback_data=f"admin_land_today_{username}")
+        builder.button(text="Завтра", callback_data=f"admin_land_tomorrow_{username}")
+        builder.adjust(2)
+        await message.answer(f"🚐 Выберите дату для @{username}:", reply_markup=builder.as_markup())
 
-@router.callback_query(F.data.startswith("admin_land_"))
-async def process_admin_land_selection(callback: types.CallbackQuery):
-    parts = callback.data.split("_", 3)
-    # data is admin_land_[today|tomorrow]_[username]
-    day = parts[2]
-    username = parts[3]
-    
-    is_today = day == "today"
-    target_date = datetime.date.today() if is_today else datetime.date.today() + datetime.timedelta(days=1)
-    
-    await callback.answer(f"Загружаю...")
-    plans = await sea_plan_service.get_guide_land_plan(username, target_date)
-    
+async def _send_admin_land_plans(username: str, target_date: datetime.date, plans: list, message: types.Message):
+    """Helper to format and send land plans in Admin view"""
     if not plans:
-        await callback.message.answer(f"🚐 План на суше для @{username} не найден на {target_date.strftime('%d.%m')}.")
+        await message.answer(f"🚐 План на суше для @{username} не найден на {target_date.strftime('%d.%m')}.")
         return
 
     for plan in plans:
@@ -347,7 +375,7 @@ async def process_admin_land_selection(callback: types.CallbackQuery):
                 response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
                 response += "\n"
         
-        await callback.message.answer(response, parse_mode="HTML")
+        await message.answer(response, parse_mode="HTML")
 
 @router.message(F.text == "📊 Статистика")
 async def cmd_stats_kb(message: types.Message):
