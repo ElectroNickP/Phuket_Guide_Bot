@@ -1,5 +1,6 @@
 from aiogram import Router, types, F
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from services.google_sheets import google_sheets
 from services.sea_plan import sea_plan_service
 from database.db import update_user_activity
