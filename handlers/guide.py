@@ -102,7 +102,15 @@ async def process_sea_query(callback: types.CallbackQuery):
                     response += f"  • {prog_text}\n"
             response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n\n"
         
-        await callback.message.edit_text(response, parse_mode="HTML")
+        # Add a Guest List button if there are programs 
+        guest_list_btn = None
+        has_programs = any(len(p['programs']) > 0 for p in plans)
+        if has_programs:
+            builder = InlineKeyboardBuilder()
+            builder.button(text="📋 Список гостей", callback_data=f"guestlist_guide_{target_date.strftime('%d.%m')}")
+            guest_list_btn = builder.as_markup()
+        
+        await callback.message.edit_text(response, parse_mode="HTML", reply_markup=guest_list_btn)
         await callback.answer()
         
         # Track activity
@@ -137,3 +145,62 @@ async def cmd_status(message: types.Message):
         status = "Не найден в списке ❓"
 
     await message.answer(f"Твой статус: <b>{status}</b>", parse_mode="HTML")
+
+@router.callback_query(F.data.startswith("guestlist_guide_"))
+async def process_guest_list_guide(callback: types.CallbackQuery):
+    try:
+        # data is guestlist_guide_dd.mm
+        date_str = callback.data.split('_')[2]
+        target_date = datetime.datetime.strptime(f"{date_str}.{datetime.date.today().year}", "%d.%m.%Y").date()
+    except ValueError:
+        await callback.answer("Ошибка формата даты", show_alert=True)
+        return
+
+    username = callback.from_user.username
+    if not username:
+        await callback.answer("Для работы требуется @username в Telegram.", show_alert=True)
+        return
+
+    plans = await sea_plan_service.get_guide_sea_plan(username, target_date)
+    if not plans:
+        await callback.answer("Не найдено программ на эту дату.", show_alert=True)
+        return
+
+    program_names = []
+    for plan in plans:
+        for prog in plan['programs']:
+            if prog['name'] not in program_names:
+                program_names.append(prog['name'])
+
+    if not program_names:
+        await callback.answer("У вас нет программ на эту дату.", show_alert=True)
+        return
+
+    await callback.answer("Загружаю список гостей...")
+
+    guest_list = await sea_plan_service.get_guest_list(target_date, program_names)
+    
+    if not guest_list:
+        await callback.message.answer(f"📋 Список гостей пуст или не найден для программ: {', '.join(program_names)}")
+        return
+
+    response = f"📋 <b>Список гостей ({date_str})</b>:\n\n"
+    
+    for item in guest_list:
+        pname = item['program_name']
+        guests = item['guests']
+        response += f"🔹 <b>Program: {pname}</b>\n"
+        
+        for g in guests:
+            response += f"  • <b>V/C:</b> {g['voucher']} | <b>Pax:</b> {g['pax']}\n"
+            if g['pickup']:
+                response += f"    <b>Pickup:</b> {g['pickup']}\n"
+            response += f"    <b>Hotel:</b> {g['hotel']} (RM: {g['room']})\n"
+            response += f"    <b>Name:</b> {g['name']}\n"
+            if g['phone']:
+                response += f"    <b>Phone:</b> {g['phone']}\n"
+            if g['remarks']:
+                response += f"    <b>Remarks:</b> {g['remarks']}\n"
+            response += "\n"
+    
+    await callback.message.answer(response, parse_mode="HTML")

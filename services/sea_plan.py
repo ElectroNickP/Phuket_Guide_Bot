@@ -94,6 +94,8 @@ class SeaPlanService:
         # Defensive column validation on the first non-empty row
         if all_values:
             self._validate_sheet_columns(all_values[0])
+            for idx, r in enumerate(all_values[:25]):
+                logger.debug(f"ROW {idx}: {r}")
 
         # boat_id (pier+boat name) -> aggregated_info
         boats_data = {}
@@ -189,5 +191,53 @@ class SeaPlanService:
                 result_plans.append(formatted_plan)
         
         return result_plans if result_plans else None
+
+    async def get_guest_list(self, target_date: datetime.date, program_names: list[str]) -> list[dict]:
+        """
+        Retrieves a detailed guest list from the top section of the sheet
+        based on exact matches with the given program names.
+        """
+        sheet = await self.get_date_worksheet(target_date)
+        if not sheet:
+            return []
+
+        all_values = await asyncio.to_thread(sheet.get_all_values)
+        
+        # We'll return a list of guests
+        guests = []
+        
+        # Scan through rows.
+        for r in all_values:
+            # Skip empty or short rows
+            if len(r) < 16:
+                continue
+                
+            program_str = r[13].strip()
+            # If the row has a program that is in our target list
+            if program_str and program_str in program_names:
+                guests.append({
+                    "program": program_str,
+                    "agent": r[1].strip(),
+                    "voucher": r[2].strip(),
+                    "pickup": r[3].strip(),
+                    "hotel": r[4].strip(),
+                    "room": r[6].strip(),
+                    "name": r[7].strip(),
+                    "phone": r[8].strip(),
+                    "pax": r[12].strip(),
+                    "remarks": r[15].strip(),
+                })
+                
+        # Return grouped by program
+        grouped_guests = {}
+        for p in program_names:
+            grouped_guests[p] = []
+            
+        for g in guests:
+            if g["program"] in grouped_guests:
+                grouped_guests[g["program"]].append(g)
+                
+        # Only return non-empty programs
+        return [{"program_name": k, "guests": v} for k, v in grouped_guests.items() if v]
 
 sea_plan_service = SeaPlanService()
