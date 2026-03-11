@@ -117,10 +117,10 @@ class SeaPlanService:
             row_program = row[4].strip()
 
             # STOP CONDITION: break if we hit the summary or private tour sections
-            # We check multiple columns for keywords like BOOKED, FREE, TOTAL, JOB ORDER
+            # WE ONLY APPLY THIS IF WE HAVE ALREADY FOUND A BOAT (to avoid breaking on headers)
             stop_keywords = ["BOOKED", "FREE", "TOTAL", "ENHANCED", "STANDARD", "SUPERIOR", "JOB ORDER"]
-            if any(k in row_thai.upper() for k in stop_keywords) or \
-               any(k in row_program.upper() for k in stop_keywords):
+            if current_boat and (any(k in row_thai.upper() for k in stop_keywords) or \
+                               any(k in row_program.upper() for k in stop_keywords)):
                 logger.debug(f"Stop condition met at row {i}: {row_thai} | {row_program}")
                 break
 
@@ -218,15 +218,6 @@ class SeaPlanService:
                     continue
                 
                 guide_str = row[7].strip()
-                row_thai = row[1].strip() if len(row) > 1 else ""
-                row_program = row[4].strip() if len(row) > 4 else ""
-
-                # STOP CONDITION
-                stop_keywords = ["BOOKED", "FREE", "TOTAL", "ENHANCED", "STANDARD", "SUPERIOR", "JOB ORDER"]
-                if any(k in row_thai.upper() for k in stop_keywords) or \
-                   any(k in row_program.upper() for k in stop_keywords):
-                    break
-
                 if not guide_str or '@' not in guide_str:
                     continue
                 
