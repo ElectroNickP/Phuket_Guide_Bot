@@ -186,32 +186,29 @@ async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
             plans = await sea_plan_service.get_guide_sea_plan(target_username, date)
             if plans:
                 found_any = True
-                response += f"📅 <b>Дата: {date_str}</b>\n"
+                day_response = f"👁 <b>Архив/Мониторинг МОРЕ: @{target_username}</b>\n\n"
+                day_response += f"📅 <b>Дата: {date_str}</b>\n"
                 for plan in plans:
-                    response += f"🚢 <b>Лодка:</b> {plan['boat']}\n"
-                    response += f"⚓️ <b>Пирс:</b> {plan['pier'] or '---'}\n"
-                    response += f"👤 <b>Thai Guide:</b> {plan['thai_guide'] or '---'}\n"
-                    response += f"👥 <b>Гид(ы):</b> {', '.join(plan['guides_list'])}\n"
-                    response += f"📝 <b>Программы:</b>\n"
+                    day_response += f"🚢 <b>Лодка:</b> {plan['boat']}\n"
+                    day_response += f"⚓️ <b>Пирс:</b> {plan['pier'] or '---'}\n"
+                    day_response += f"👤 <b>Thai Guide:</b> {plan['thai_guide'] or '---'}\n"
+                    day_response += f"👥 <b>Гид(ы):</b> {', '.join(plan['guides_list'])}\n"
+                    day_response += f"📝 <b>Программы:</b>\n"
                     for prog in plan['programs']:
                         prog_text = f"{prog['name']} ({prog['pax']} pax)"
                         if len(plan['guides_list']) > 1 and prog.get('short_guide'):
                             prog_text += f" - {prog['short_guide']}"
-                        response += f"  • {prog_text}\n"
-                    response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n"
-                response += "\n"
+                        day_response += f"  • {prog_text}\n"
+                    day_response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n"
+                
+                builder = InlineKeyboardBuilder()
+                builder.button(text="📋 Список гостей", callback_data=f"guestlist_admin_{date_str}_{target_username}")
+                await message.answer(day_response, parse_mode="HTML", reply_markup=builder.as_markup())
         except Exception as e:
             logger.error(f"Error in admin sea monitor for {target_username} on {date_str}: {e}")
 
     if not found_any:
         await message.answer(f"❌ План на море для @{target_username} на сегодня/завтра не найден.")
-    else:
-        # We'll just provide a button for today and tomorrow if plans exist
-        builder = InlineKeyboardBuilder()
-        builder.button(text="📋 Гости (сегодня)", callback_data=f"guestlist_admin_{today.strftime('%d.%m')}_{target_username}")
-        builder.button(text="📋 Гости (завтра)", callback_data=f"guestlist_admin_{tomorrow.strftime('%d.%m')}_{target_username}")
-        
-        await message.answer(response, parse_mode="HTML", reply_markup=builder.as_markup())
     
     await state.clear()
 
