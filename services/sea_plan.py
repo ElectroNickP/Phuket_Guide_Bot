@@ -216,6 +216,42 @@ class SeaPlanService:
                     all_usernames.add(uname.lower())
                     
         return sorted(list(all_usernames))
+
+    async def get_active_land_guides(self, target_dates: list[datetime.date]) -> list[str]:
+        """
+        Returns a sorted list of unique @usernames active in land plans for the given dates.
+        """
+        all_usernames = set()
+        
+        for t_date in target_dates:
+            sheet = await self.get_date_worksheet(t_date)
+            if not sheet:
+                continue
+            
+            all_values = await asyncio.to_thread(sheet.get_all_values)
+            
+            # Find land section start
+            land_start = -1
+            for i, row in enumerate(all_values):
+                row_str = " ".join([str(v) for v in row if v])
+                if 'JOB ORDER - LAND JOINED TOURS' in row_str:
+                    land_start = i
+                    break
+            
+            if land_start == -1:
+                continue
+
+            for i in range(land_start + 1, len(all_values)):
+                row = all_values[i]
+                if len(row) < 2:
+                    continue
+                col1 = row[1].strip()
+                if '@' in col1:
+                    matches = re.findall(r'@(\w+)', col1)
+                    for uname in matches:
+                        all_usernames.add(uname.lower())
+                    
+        return sorted(list(all_usernames))
         
     async def get_guide_land_plan(self, username: str, target_date: datetime.date):
         """

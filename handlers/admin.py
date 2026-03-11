@@ -235,8 +235,41 @@ async def process_admin_sea_guide_select(callback: types.CallbackQuery, state: F
 
 @router.message(F.text == "🚐 Мониторинг суши")
 async def cmd_monitor_land(message: types.Message, state: FSMContext):
-    await message.answer("🚐 Введи username гида (через @), чей ПЛАН НА СУШЕ ты хочешь посмотреть:")
+    # Fetch active guides for today and tomorrow
+    today = datetime.datetime.now().date()
+    tomorrow = today + datetime.timedelta(days=1)
+    
+    msg = await message.answer("🔍 Ищу гидов в наземной программе...")
+    active_guides = await sea_plan_service.get_active_land_guides([today, tomorrow])
+    
+    if active_guides:
+        builder = InlineKeyboardBuilder()
+        for uname in active_guides:
+            builder.button(text=f"👤 @{uname}", callback_data=f"admland_{uname}")
+        builder.adjust(2)
+        await message.answer(
+            f"🚐 Найдено {len(active_guides)} гидов в наземной программе на сегодня/завтра.\n"
+            "Выбери гида или введи username вручную:",
+            reply_markup=builder.as_markup()
+        )
+    else:
+        await message.answer("🚐 В наземной программе на сегодня/завтра гидов не найдено.\nВведи username гида вручную:")
+    
+    await msg.delete()
     await state.set_state(AdminStates.waiting_for_land_monitor_username)
+
+@router.callback_query(F.data.startswith("admland_"))
+async def process_admin_land_guide_select(callback: types.CallbackQuery, state: FSMContext):
+    username = callback.data.split("_", 1)[1]
+    await callback.answer(f"Выбран @{username}")
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Сегодня", callback_data=f"admin_land_today_{username}")
+    builder.button(text="Завтра", callback_data=f"admin_land_tomorrow_{username}")
+    builder.adjust(2)
+    
+    await callback.message.answer(f"🚐 План на суше для @{username}:", reply_markup=builder.as_markup())
+    await state.clear()
 
 @router.message(AdminStates.waiting_for_guide_name_sea)
 async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
