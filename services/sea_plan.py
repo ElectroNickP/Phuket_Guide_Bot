@@ -191,6 +191,31 @@ class SeaPlanService:
                 result_plans.append(formatted_plan)
         
         return result_plans
+
+    async def get_active_sea_guides(self, target_dates: list[datetime.date]) -> list[str]:
+        """
+        Returns a sorted list of unique @usernames active in sea plans for the given dates.
+        """
+        all_usernames = set()
+        
+        for t_date in target_dates:
+            sheet = await self.get_date_worksheet(t_date)
+            if not sheet:
+                continue
+            
+            all_values = await asyncio.to_thread(sheet.get_all_values)
+            for row in all_values:
+                if len(row) < 8:
+                    continue
+                guide_str = row[7].strip()
+                if not guide_str or '@' not in guide_str:
+                    continue
+                
+                matches = re.findall(r'@(\w+)', guide_str)
+                for uname in matches:
+                    all_usernames.add(uname.lower())
+                    
+        return sorted(list(all_usernames))
         
     async def get_guide_land_plan(self, username: str, target_date: datetime.date):
         """

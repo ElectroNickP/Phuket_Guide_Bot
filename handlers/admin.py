@@ -167,23 +167,33 @@ async def process_guide_monitor(message: types.Message, state: FSMContext):
 
 @router.message(F.text == "🌊 Мониторинг моря")
 async def cmd_monitor_sea_guides(message: types.Message, state: FSMContext):
-    await message.answer("🌊 Введи username гида (через @), чей ПЛАН НА МОРЕ ты хочешь посмотреть:")
-    await state.set_state(AdminStates.waiting_for_guide_name_sea)
-
-@router.message(F.text == "🚐 Мониторинг суши")
-async def cmd_monitor_land(message: types.Message, state: FSMContext):
-    await message.answer("🚐 Введи username гида (через @), чей ПЛАН НА СУШЕ ты хочешь посмотреть:")
-    await state.set_state(AdminStates.waiting_for_land_monitor_username)
-
-@router.message(AdminStates.waiting_for_guide_name_sea)
-async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
-    target_username = message.text.replace("@", "").strip()
-    
-    # Try today and tomorrow
+    # Fetch active guides for today and tomorrow
     today = datetime.datetime.now().date()
     tomorrow = today + datetime.timedelta(days=1)
     
-    response = f"👁 <b>Архив/Мониторинг МОРЕ: @{target_username}</b>\n\n"
+    msg = await message.answer("🔍 Ищу гидов в морской программе...")
+    active_guides = await sea_plan_service.get_active_sea_guides([today, tomorrow])
+    
+    if active_guides:
+        builder = InlineKeyboardBuilder()
+        for uname in active_guides:
+            builder.button(text=f"👤 @{uname}", callback_data=f"admsea_{uname}")
+        builder.adjust(2)
+        await message.answer(
+            f"🌊 Найдено {len(active_guides)} гидов в программе на сегодня/завтра.\n"
+            "Выбери гида или введи username вручную:",
+            reply_markup=builder.as_markup()
+        )
+    else:
+        await message.answer("🌊 В программе на сегодня/завтра гидов не найдено.\nВведи username гида вручную:")
+    
+    await msg.delete()
+    await state.set_state(AdminStates.waiting_for_guide_name_sea)
+
+async def _send_admin_sea_plans(target_username: str, message: types.Message):
+    """Helper to fetch and send sea plans for a guide (Refactored)"""
+    today = datetime.datetime.now().date()
+    tomorrow = today + datetime.timedelta(days=1)
     
     found_any = False
     for date in [today, tomorrow]:
@@ -215,7 +225,23 @@ async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
 
     if not found_any:
         await message.answer(f"❌ План на море для @{target_username} на сегодня/завтра не найден.")
-    
+
+@router.callback_query(F.data.startswith("admsea_"))
+async def process_admin_sea_guide_select(callback: types.CallbackQuery, state: FSMContext):
+    target_username = callback.data.split("_", 1)[1]
+    await callback.answer(f"Выбран @{target_username}")
+    await _send_admin_sea_plans(target_username, callback.message)
+    await state.clear()
+
+@router.message(F.text == "🚐 Мониторинг суши")
+async def cmd_monitor_land(message: types.Message, state: FSMContext):
+    await message.answer("🚐 Введи username гида (через @), чей ПЛАН НА СУШЕ ты хочешь посмотреть:")
+    await state.set_state(AdminStates.waiting_for_land_monitor_username)
+
+@router.message(AdminStates.waiting_for_guide_name_sea)
+async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
+    target_username = message.text.replace("@", "").strip()
+    await _send_admin_sea_plans(target_username, message)
     await state.clear()
 
 @router.message(AdminStates.waiting_for_land_monitor_username)
