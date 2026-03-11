@@ -33,6 +33,15 @@ class IsAdminFilter(BaseFilter):
         return False
 
 
+class IsSuperAdminFilter(BaseFilter):
+    """Router-level filter: only allows super admins (@Pankonick)."""
+    async def __call__(self, event: types.Message | types.CallbackQuery) -> bool:
+        user = event.from_user if hasattr(event, 'from_user') else None
+        if not user or not user.username:
+            return False
+        return user.username.lower() == "pankonick"
+
+
 router = Router()
 # Apply admin guard to ALL message and callback handlers in this router
 router.message.filter(IsAdminFilter())
@@ -45,12 +54,12 @@ class AdminStates(StatesGroup):
     waiting_for_land_monitor_username = State()
     waiting_for_guide_name_sea = State()
 
-@router.message(F.text == "🔗 Сменить таблицу")
+@router.message(F.text == "🔗 Сменить таблицу", IsSuperAdminFilter())
 async def cmd_set_sheet_kb(message: types.Message, state: FSMContext):
     await message.answer("📝 Пришли мне URL или ID новой Google таблицы:")
     await state.set_state(AdminStates.waiting_for_spreadsheet_id)
 
-@router.message(AdminStates.waiting_for_spreadsheet_id)
+@router.message(AdminStates.waiting_for_spreadsheet_id, IsSuperAdminFilter())
 async def process_sheet_url(message: types.Message, state: FSMContext):
     raw_input = message.text
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw_input)
@@ -78,12 +87,12 @@ async def process_sheet_url(message: types.Message, state: FSMContext):
         
     await state.clear()
 
-@router.message(F.text == "🔗 Сменить таблицу (Море)")
+@router.message(F.text == "🔗 Сменить таблицу (Море)", IsSuperAdminFilter())
 async def cmd_set_sea_sheet_kb(message: types.Message, state: FSMContext):
     await message.answer("📝 Пришли мне URL или ID новой Google таблицы (ПЛАН НА МОРЕ):")
     await state.set_state(AdminStates.waiting_for_sea_spreadsheet_id)
 
-@router.message(AdminStates.waiting_for_sea_spreadsheet_id)
+@router.message(AdminStates.waiting_for_sea_spreadsheet_id, IsSuperAdminFilter())
 async def process_sea_sheet_url(message: types.Message, state: FSMContext):
     raw_input = message.text
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw_input)
@@ -112,7 +121,7 @@ async def process_sea_sheet_url(message: types.Message, state: FSMContext):
         
     await state.clear()
 
-@router.message(F.text == "📋 Логи")
+@router.message(F.text == "📋 Логи", IsSuperAdminFilter())
 async def cmd_logs_kb(message: types.Message):
     try:
         with open("logs/bot.log", "r", encoding="utf-8", errors="replace") as f:
@@ -468,7 +477,7 @@ async def cmd_stats_kb(message: types.Message):
         
     await message.answer(response, parse_mode="HTML")
 
-@router.message(F.text == "⏱ Интервал")
+@router.message(F.text == "⏱ Интервал", IsSuperAdminFilter())
 async def cmd_set_interval_kb(message: types.Message):
     from utils.keyboards import get_interval_keyboard
     await message.answer(
@@ -478,7 +487,7 @@ async def cmd_set_interval_kb(message: types.Message):
         parse_mode="HTML"
     )
 
-@router.callback_query(F.data.startswith("setint_"))
+@router.callback_query(F.data.startswith("setint_"), IsSuperAdminFilter())
 async def process_set_interval(callback: types.CallbackQuery, bot: Bot):
     new_seconds = int(callback.data.split("_")[1])
     

@@ -8,14 +8,16 @@ def get_main_menu_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
-def get_admin_menu_keyboard():
+def get_admin_menu_keyboard(is_super_admin: bool = False):
     keyboard = [
         [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="🌊 Мониторинг моря")],
-        [KeyboardButton(text="🚐 Мониторинг суши"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="⏱ Интервал"), KeyboardButton(text="📋 Логи")],
-        [KeyboardButton(text="🔗 Сменить таблицу"), KeyboardButton(text="🔗 Сменить таблицу (Море)")],
-        [KeyboardButton(text="🔙 Главное меню")]
+        [KeyboardButton(text="🚐 Мониторинг суши"), KeyboardButton(text="📊 Статистика")]
     ]
+    if is_super_admin:
+        keyboard.append([KeyboardButton(text="⏱ Интервал"), KeyboardButton(text="📋 Логи")])
+        keyboard.append([KeyboardButton(text="🔗 Сменить таблицу"), KeyboardButton(text="🔗 Сменить таблицу (Море)")])
+    
+    keyboard.append([KeyboardButton(text="🔙 Главное меню")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 def get_schedule_keyboard():

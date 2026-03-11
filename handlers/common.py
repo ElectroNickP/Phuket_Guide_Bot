@@ -68,7 +68,10 @@ async def cmd_start(message: types.Message, bot: Bot):
         logger.debug(f"User {message.from_user.id} is_admin: {is_admin} (Username: {message.from_user.username})")
         if is_admin:
             logger.debug("Calling get_admin_menu_keyboard")
-            kb = get_admin_menu_keyboard()
+            is_super_admin = False
+            if message.from_user.username:
+                is_super_admin = message.from_user.username.lower() == "pankonick"
+            kb = get_admin_menu_keyboard(is_super_admin=is_super_admin)
         else:
             logger.debug("Calling get_main_menu_keyboard")
             kb = get_main_menu_keyboard()
