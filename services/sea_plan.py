@@ -167,9 +167,9 @@ class SeaPlanService:
 
             # Aggregate guide
             if guide_str:
-                match = re.search(r'@(\w+)', guide_str)
-                if match:
-                    uname = match.group(1).lower()
+                matches = re.findall(r'@(\w+)', guide_str)
+                for uname_raw in matches:
+                    uname = uname_raw.lower()
                     boats_data[boat_key]["assigned_usernames"].add(uname)
                     boats_data[boat_key]["guides"].add(guide_str)
 
@@ -189,6 +189,8 @@ class SeaPlanService:
                     "programs": data["programs"]  # Raw list for conditional formatting in handlers
                 }
                 result_plans.append(formatted_plan)
+        
+        return result_plans
         
     async def get_guide_land_plan(self, username: str, target_date: datetime.date):
         """
