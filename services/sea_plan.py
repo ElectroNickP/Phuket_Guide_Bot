@@ -303,10 +303,12 @@ class SeaPlanService:
                     "voucher": col2 or "N/A",
                     "pickup": col3,
                     "hotel": col4,
+                    "area": row[5].strip() if len(row) > 5 else "-",
                     "room": row[6].strip() or "-",
                     "name": col7,
                     "phone": row[8].strip() or "-",
                     "pax": pax_str,
+                    "cot": row[14].strip() if len(row) > 14 else "0",
                     "remarks": row[15].strip() if len(row) > 15 else "-"
                 })
 

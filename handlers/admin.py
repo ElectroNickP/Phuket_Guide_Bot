@@ -267,10 +267,11 @@ async def process_admin_land_selection(callback: types.CallbackQuery):
             response += "\n👥 <b>GUEST LIST:</b>\n"
             for i, g in enumerate(plan['guests'], 1):
                 response += f"{i}. <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
-                response += f"   <b>Hotel:</b> {g['hotel']} (RM: {g['room']})\n"
-                response += f"   <b>Name:</b> <code>{g['name']}</code>\n"
+                response += f"   🕒 <b>P/U:</b> <code>{g['pickup']}</code> | 💰 <b>COT:</b> <code>{g['cot']}</code>\n"
+                response += f"   🏨 <b>Hotel:</b> {g['hotel']} ({g['area']}) | <b>RM:</b> {g['room']}\n"
+                response += f"   👤 <b>Name:</b> <code>{g['name']}</code>\n"
                 if g['phone'] and g['phone'] != "-":
-                    response += f"   <b>Phone:</b> <code>{g['phone']}</code>\n"
+                    response += f"   📞 <b>Phone:</b> <code>{g['phone']}</code>\n"
                 response += "\n"
         
         await callback.message.answer(response, parse_mode="HTML")
