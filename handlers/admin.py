@@ -1,3 +1,4 @@
+from utils.time import get_phuket_now, get_phuket_today
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command, BaseFilter
 from aiogram.fsm.context import FSMContext
@@ -168,8 +169,8 @@ async def process_guide_monitor(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Гид @{target_username} не найден в таблице.")
     else:
         # Show today/tomorrow schedule for this guide
-        today = datetime.datetime.now().day
-        tomorrow = (datetime.datetime.now() + datetime.timedelta(days=1)).day
+        today = get_phuket_now().day
+        tomorrow = (get_phuket_now() + datetime.timedelta(days=1)).day
         
         sched_today = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=today)
         sched_tomorrow = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=tomorrow)
@@ -202,7 +203,7 @@ async def cmd_monitor_sea_guides(message: types.Message, state: FSMContext):
 @router.callback_query(F.data.startswith("admsea_date_"))
 async def process_admin_sea_date_select(callback: types.CallbackQuery, state: FSMContext):
     is_today = "today" in callback.data
-    target_date = datetime.date.today() if is_today else datetime.date.today() + datetime.timedelta(days=1)
+    target_date = get_phuket_today() if is_today else get_phuket_today() + datetime.timedelta(days=1)
     date_str = target_date.strftime("%d.%m")
     
     await callback.answer(f"Ищу гидов на {date_str}...")
@@ -234,7 +235,7 @@ async def process_admin_sea_user_select(callback: types.CallbackQuery):
     date_str = parts[2]
     username = parts[3]
     
-    target_date = datetime.datetime.strptime(f"{date_str}.{datetime.date.today().year}", "%d.%m.%Y").date()
+    target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
     
     await callback.answer(f"Загружаю @{username}...")
     await _send_admin_sea_plans_single(username, target_date, callback.message)
@@ -271,7 +272,7 @@ async def _send_admin_sea_plans_single(target_username: str, date: datetime.date
 
 async def _send_admin_sea_plans(target_username: str, message: types.Message):
     """Legacy helper (Today and Tomorrow) for manual entry with no state"""
-    today = datetime.datetime.now().date()
+    today = get_phuket_now().date()
     tomorrow = today + datetime.timedelta(days=1)
     found_any = False
     for date in [today, tomorrow]:
@@ -307,7 +308,7 @@ async def cmd_monitor_land(message: types.Message, state: FSMContext):
 @router.callback_query(F.data.startswith("admland_date_"))
 async def process_admin_land_date_select(callback: types.CallbackQuery, state: FSMContext):
     is_today = "today" in callback.data
-    target_date = datetime.date.today() if is_today else datetime.date.today() + datetime.timedelta(days=1)
+    target_date = get_phuket_today() if is_today else get_phuket_today() + datetime.timedelta(days=1)
     date_str = target_date.strftime("%d.%m")
     
     await callback.answer(f"Ищу гидов на {date_str}...")
@@ -339,7 +340,7 @@ async def process_admin_land_user_select(callback: types.CallbackQuery):
     date_str = parts[2]
     username = parts[3]
     
-    target_date = datetime.datetime.strptime(f"{date_str}.{datetime.date.today().year}", "%d.%m.%Y").date()
+    target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
     
     await callback.answer(f"Загружаю @{username}...")
     plans = await sea_plan_service.get_guide_land_plan(username, target_date)
@@ -525,7 +526,7 @@ async def process_guest_list_admin(callback: types.CallbackQuery):
         parts = callback.data.split('_', 3)
         date_str = parts[2]
         tgt_username = parts[3]
-        target_date = datetime.datetime.strptime(f"{date_str}.{datetime.date.today().year}", "%d.%m.%Y").date()
+        target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
     except (ValueError, IndexError):
         await callback.answer("Ошибка формата данных", show_alert=True)
         return

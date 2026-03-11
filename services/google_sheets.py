@@ -1,3 +1,4 @@
+from utils.time import get_phuket_now, get_phuket_today
 import asyncio
 import gspread
 from google.oauth2.service_account import Credentials
@@ -59,7 +60,7 @@ class GoogleSheetsService:
         if not spreadsheet:
             return None
 
-        now = datetime.datetime.now()
+        now = get_phuket_now()
         month = f"{now.month:02d}"
         year_short = str(now.year)[2:]
         
@@ -132,7 +133,7 @@ class GoogleSheetsService:
 
     async def get_guide_schedule(self, sheet, guide_row, day=None):
         if day is None:
-            day = datetime.datetime.now().day
+            day = get_phuket_now().day
             
         col_idx = 2 + day
         # Run blocking call in thread pool

@@ -1,3 +1,4 @@
+from utils.time import get_phuket_now, get_phuket_today
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -40,7 +41,7 @@ async def process_schedule_query(callback: types.CallbackQuery):
         return
 
     is_tomorrow = "tomorrow" in callback.data
-    target_date = datetime.datetime.now()
+    target_date = get_phuket_now()
     if is_tomorrow:
         target_date += datetime.timedelta(days=1)
     
@@ -72,7 +73,7 @@ async def cmd_land_plan(message: types.Message):
 async def process_sea_query(callback: types.CallbackQuery):
     """Process inline buttons for sea plan"""
     is_tomorrow = "tomorrow" in callback.data
-    target_date = datetime.datetime.now().date()
+    target_date = get_phuket_now().date()
     if is_tomorrow:
         target_date += datetime.timedelta(days=1)
         
@@ -155,7 +156,7 @@ async def process_guest_list_guide(callback: types.CallbackQuery):
     try:
         # data is guestlist_guide_dd.mm
         date_str = callback.data.split('_')[2]
-        target_date = datetime.datetime.strptime(f"{date_str}.{datetime.date.today().year}", "%d.%m.%Y").date()
+        target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
     except ValueError:
         await callback.answer("Ошибка формата даты", show_alert=True)
         return
@@ -213,7 +214,7 @@ async def process_guest_list_guide(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("land_"))
 async def process_land_plan_guide(callback: types.CallbackQuery):
     is_today = callback.data == "land_today"
-    target_date = datetime.date.today() if is_today else datetime.date.today() + datetime.timedelta(days=1)
+    target_date = get_phuket_today() if is_today else get_phuket_today() + datetime.timedelta(days=1)
     date_str = target_date.strftime("%d.%m")
 
     username = callback.from_user.username

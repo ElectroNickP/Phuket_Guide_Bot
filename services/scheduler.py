@@ -1,3 +1,4 @@
+from utils.time import get_phuket_now, get_phuket_today
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from services.google_sheets import google_sheets
 from database.db import AsyncSessionLocal
@@ -46,7 +47,7 @@ async def cache_user_schedule(session, bot: Bot, user: User, sheet, all_guides_s
             cache_entry.last_updated = datetime.datetime.utcnow()
             
             if notify:
-                date_label = "сегодня" if target_date.date() == datetime.datetime.now().date() else "завтра"
+                date_label = "сегодня" if target_date.date() == get_phuket_now().date() else "завтра"
                 try:
                     await bot.send_message(
                         user.telegram_id,
@@ -78,7 +79,7 @@ async def check_schedule_changes(bot: Bot):
         staff, freelance = await google_sheets.parse_guides(sheet)
         all_guides_sheet = staff + freelance
         
-        today = datetime.datetime.now()
+        today = get_phuket_now()
         tomorrow = today + datetime.timedelta(days=1)
         
         for user in users:

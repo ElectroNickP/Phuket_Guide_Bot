@@ -1,3 +1,4 @@
+from utils.time import get_phuket_now, get_phuket_today
 from aiogram import Router, types, F, Bot
 from aiogram.filters import CommandStart, Command
 from loguru import logger
@@ -42,7 +43,7 @@ async def cmd_start(message: types.Message, bot: Bot):
                         if sheet:
                             staff, freelance = await google_sheets.parse_guides(sheet)
                             all_guides = staff + freelance
-                            now = datetime.datetime.now()
+                            now = get_phuket_now()
                             tomorrow = now + datetime.timedelta(days=1)
                             await cache_user_schedule(session, bot, user, sheet, all_guides, now, notify=False)
                             await cache_user_schedule(session, bot, user, sheet, all_guides, tomorrow, notify=False)
