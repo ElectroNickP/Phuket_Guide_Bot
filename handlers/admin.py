@@ -275,29 +275,32 @@ async def process_admin_land_selection(callback: types.CallbackQuery):
 
     for plan in plans:
         response = f"🚐 <b>ADMIN VIEW: @{username}</b>\n"
-        response += f"<b>JOB ORDER: {plan['program']}</b>\n"
-        response += f"📅 <b>DATE:</b> {plan['date']}\n\n"
+        response += f"🔹 <b>Program: {plan['program']}</b>\n"
+        response += f"📅 <b>Date:</b> {plan['date']}\n\n"
         
         if plan['guides']:
-            response += "👤 <b>GUIDE(S):</b>\n"
+            response += "👤 <b>Guide(s):</b>\n"
             for g in plan['guides']:
-                response += f"• {g['full_info']} (P/U: {g['pickup_time']} @ {g['pickup_location']})\n"
+                response += f"  • {g['full_info']} (P/U: {g['pickup_time']} @ {g['pickup_location']})\n"
             response += "\n"
             
         if plan['bus']:
-            response += f"🚌 <b>BUS:</b> <code>{plan['bus']}</code>\n"
+            response += f"🚌 <b>Bus:</b> <code>{plan['bus']}</code>\n"
         if plan['driver']:
-            response += f"👨‍✈️ <b>DRIVER:</b> {plan['driver']}\n"
+            response += f"👨‍✈️ <b>Driver:</b> {plan['driver']}\n"
         
         if plan['guests']:
-            response += "\n👥 <b>GUEST LIST:</b>\n"
-            for i, g in enumerate(plan['guests'], 1):
-                response += f"{i}. <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
-                response += f"   🕒 <b>P/U:</b> <code>{g['pickup']}</code> | 💰 <b>COT:</b> <code>{g['cot']}</code>\n"
-                response += f"   🏨 <b>Hotel:</b> {g['hotel']} ({g['area']}) | <b>RM:</b> {g['room']}\n"
-                response += f"   👤 <b>Name:</b> <code>{g['name']}</code>\n"
+            response += "\n👥 <b>Guest List:</b>\n\n"
+            for g in plan['guests']:
+                response += f"  • <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
+                response += f"    <b>Pickup:</b> {g['pickup']}\n"
+                response += f"    <b>Hotel:</b> {g['hotel']} ({g['area']}) (RM: {g['room']})\n"
+                response += f"    <b>Name:</b> <code>{g['name']}</code>\n"
                 if g['phone'] and g['phone'] != "-":
-                    response += f"   📞 <b>Phone:</b> <code>{g['phone']}</code>\n"
+                    response += f"    <b>Phone:</b> <code>{g['phone']}</code>\n"
+                if g['remarks'] and g['remarks'] != "-":
+                    response += f"    <b>Remarks:</b> {g['remarks']}\n"
+                response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
                 response += "\n"
         
         await callback.message.answer(response, parse_mode="HTML")
