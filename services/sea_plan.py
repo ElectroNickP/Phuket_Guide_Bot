@@ -414,7 +414,7 @@ class SeaPlanService:
                     "room": r[6].strip(),
                     "name": r[7].strip(),
                     "phone": r[8].strip(),
-                    "pax": r[12].strip(),
+                    "pax": f"{r[9].strip() or '0'}/{r[10].strip() or '0'}/{r[11].strip() or '0'}",
                     "cot": r[14].strip() if len(r) > 14 else "0",
                     "remarks": r[15].strip(),
                 })
