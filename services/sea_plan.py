@@ -307,6 +307,16 @@ class SeaPlanService:
 
         for i in range(land_start + 1, len(all_values)):
             row = all_values[i]
+            
+            # Stop condition: reached next day's section or summary
+            if row and row[0] and target_date.strftime("%d.%m") not in row[0]:
+                if i > land_start + 50: # Only stop if we've scanned a decent amount
+                    break
+
+            row_str = " ".join([str(v) for v in row if v]).upper()
+            if i > land_start + 5 and ('TOTAL' in row_str or 'JOB ORDER - PRIVATE' in row_str):
+                break
+
             if len(row) < 16: continue
             
             col1 = row[1].strip() # Agent / Guide Handle
@@ -315,9 +325,15 @@ class SeaPlanService:
             col4 = row[4].strip() # Hotel / Program
             col7 = row[7].strip() # Guest Name / Guide Short Name
             
-            # 1. Detect Program/Bus Header (e.g. "Krabi b1", "Khao lak b2")
-            # Logic: Col 4 contains " b" followed by digits, and Col 1 is NOT a guide row
-            if col4 and re.search(r' b\d+', col4) and not ('@' in col1):
+            # 1. Detect Program/Bus Header (e.g. "Krabi b1", "Bus 1", "B2")
+            # Logic: Col 3 or 4 contains " b" followed by digits (case insensitive), or "Bus \d+"
+            is_header = False
+            if col4 and (re.search(r' b\d+', col4, re.IGNORECASE) or re.search(r'Bus \d+', col4, re.IGNORECASE)):
+                is_header = True
+            elif col3 and (re.search(r' b\d+', col3, re.IGNORECASE) or re.search(r'Bus \d+', col3, re.IGNORECASE)):
+                is_header = True
+                
+            if is_header and not ('@' in col1):
                 if current_block:
                     blocks.append(current_block)
                 current_block = {
