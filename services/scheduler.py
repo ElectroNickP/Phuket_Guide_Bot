@@ -8,6 +8,7 @@ from aiogram import Bot
 from loguru import logger
 import datetime
 from config import config
+from services.sea_plan import sea_plan_service
 
 scheduler = AsyncIOScheduler()
 
@@ -60,6 +61,63 @@ async def cache_user_schedule(session, bot: Bot, user: User, sheet, all_guides_s
                 except Exception as e:
                     logger.error(f"Failed to send notification to @{user.username}: {e}")
 
+async def cache_user_sea_schedule(session, bot: Bot, user: User, target_date: datetime.datetime, notify: bool = True):
+    """Caches sea schedule for a specific user and date, notifying on change."""
+    day_str = target_date.strftime("%d.%m")
+    
+    # Fetch sea plan
+    plans = await sea_plan_service.get_guide_sea_plan(user.username, target_date.date())
+    
+    if not plans:
+        current_program = "---"
+    else:
+        # Serialize the plan into a comparable string
+        plan_strs = []
+        for p in plans:
+            boat = p['boat']
+            progs = ", ".join([f"{prog['name']} ({prog['pax']}pax)" for prog in p['programs']])
+            plan_strs.append(f"🚢 {boat}: {progs}")
+        current_program = "\n".join(plan_strs)
+        
+    date_normalized = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    sea_cache_key = f"sea_{user.username}"
+    
+    cache_query = select(ScheduleCache).where(
+        ScheduleCache.guide_username == sea_cache_key,
+        ScheduleCache.date == date_normalized
+    )
+    cache_result = await session.execute(cache_query)
+    cache_entry = cache_result.scalar_one_or_none()
+    
+    if not cache_entry:
+        new_cache = ScheduleCache(
+            guide_username=sea_cache_key,
+            date=date_normalized,
+            program_name=current_program
+        )
+        session.add(new_cache)
+        logger.info(f"Initial sea cache for @{user.username} on {day_str}: {current_program}")
+    else:
+        if cache_entry.program_name != current_program:
+            old_program = cache_entry.program_name
+            cache_entry.program_name = current_program
+            cache_entry.last_updated = datetime.datetime.utcnow()
+            
+            if notify and current_program != "---":
+                date_label = "сегодня" if target_date.date() == get_phuket_now().date() else "завтра"
+                try:
+                    old_text = f"<s>{old_program}</s> ➡️\n" if old_program != "---" else ""
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"🌊 <b>Вниманию гида (МОРЕ)!</b>\n\n"
+                        f"Твой морской план на {date_label} ({day_str}) изменился:\n"
+                        f"{old_text}<b>{current_program}</b>",
+                        parse_mode="HTML"
+                    )
+                    logger.info(f"Sea notification sent to @{user.username} about {date_label} change.")
+                except Exception as e:
+                    logger.error(f"Failed to send sea notification to @{user.username}: {e}")
+
 async def check_schedule_changes(bot: Bot):
     """
     Checks for schedule changes for all registered guides for today and tomorrow.
@@ -83,10 +141,13 @@ async def check_schedule_changes(bot: Bot):
         tomorrow = today + datetime.timedelta(days=1)
         
         for user in users:
-            # Check Today
+            # Check Land Today & Tomorrow
             await cache_user_schedule(session, bot, user, sheet, all_guides_sheet, today)
-            # Check Tomorrow
             await cache_user_schedule(session, bot, user, sheet, all_guides_sheet, tomorrow)
+            
+            # Check Sea Today & Tomorrow
+            await cache_user_sea_schedule(session, bot, user, today)
+            await cache_user_sea_schedule(session, bot, user, tomorrow)
         
         await session.commit()
 

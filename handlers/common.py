@@ -8,7 +8,7 @@ from sqlalchemy import select
 from database.db import AsyncSessionLocal, update_user_activity
 from database.models import User, AppSettings
 from services.google_sheets import google_sheets
-from services.scheduler import cache_user_schedule
+from services.scheduler import cache_user_schedule, cache_user_sea_schedule
 import datetime
 
 router = Router()
@@ -45,8 +45,15 @@ async def cmd_start(message: types.Message, bot: Bot):
                             all_guides = staff + freelance
                             now = get_phuket_now()
                             tomorrow = now + datetime.timedelta(days=1)
+                            
+                            # Pre-cache Land schedule
                             await cache_user_schedule(session, bot, user, sheet, all_guides, now, notify=False)
                             await cache_user_schedule(session, bot, user, sheet, all_guides, tomorrow, notify=False)
+                            
+                            # Pre-cache Sea schedule
+                            await cache_user_sea_schedule(session, bot, user, now, notify=False)
+                            await cache_user_sea_schedule(session, bot, user, tomorrow, notify=False)
+                            
                             await session.commit()
                     except Exception as cache_err:
                         logger.error(f"Failed to pre-cache for new user: {cache_err}")

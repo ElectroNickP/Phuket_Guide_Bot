@@ -2,6 +2,7 @@ import asyncio
 import sys
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ErrorEvent
+from aiogram.fsm.storage.redis import RedisStorage
 from config import config
 from database.db import init_db
 from handlers import common, guide, admin, feedback
@@ -51,7 +52,8 @@ async def main():
 
     # Initialize Bot & Dispatcher
     bot = Bot(token=config.BOT_TOKEN.get_secret_value())
-    dp = Dispatcher()
+    storage = RedisStorage.from_url(config.REDIS_URL)
+    dp = Dispatcher(storage=storage)
 
     # ─── Startup Diagnostics ──────────────────────────────────────────────────
     logger.info("=" * 60)
