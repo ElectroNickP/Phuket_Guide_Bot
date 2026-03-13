@@ -8,7 +8,8 @@ from database.models import AppSettings
 from sqlalchemy import select
 import datetime
 import re
-from typing import List
+import time
+from typing import List, Dict, Tuple
 from database.dto import GuestDTO, GuideDTO, LandPlanDTO, SeaPlanDTO, ProgramDTO
 
 class SeaPlanService:
@@ -24,6 +25,8 @@ class SeaPlanService:
         self.client = gspread.authorize(self.credentials)
         self._spreadsheet = None
         self._current_spreadsheet_id = None
+        self._sheet_cache: Dict[Tuple[str, str], Tuple[float, List[List[str]]]] = {} # (sheet_id, worksheet_name) -> (timestamp, data)
+        self._cache_ttl = 300 # 5 minutes
 
     async def get_spreadsheet_id(self):
         """Fetches Sea Plan spreadsheet ID from DB or config"""
@@ -60,11 +63,40 @@ class SeaPlanService:
             return None
         date_str = target_date.strftime("%d.%m")
         try:
-            # Run blocking call in thread pool
             return await asyncio.to_thread(spreadsheet.worksheet, date_str)
         except gspread.WorksheetNotFound:
             logger.warning(f"Worksheet {date_str} not found in Sea Plan.")
             return None
+
+    async def _get_worksheet_values(self, target_date: datetime.date) -> List[List[str]]:
+        """Returns values from a worksheet, utilizing an in-memory cache to prevent 429 errors."""
+        sheet_id = await self.get_spreadsheet_id()
+        date_str = target_date.strftime("%d.%m")
+        cache_key = (sheet_id, date_str)
+        
+        now = time.time()
+        if cache_key in self._sheet_cache:
+            ts, data = self._sheet_cache[cache_key]
+            if now - ts < self._cache_ttl:
+                return data
+
+        # If not in cache or expired, fetch from Google
+        worksheet = await self.get_date_worksheet(target_date)
+        if not worksheet:
+            return []
+            
+        logger.info(f"Fetching fresh data for worksheet {date_str} (Cache miss/expired)")
+        try:
+            data = await asyncio.to_thread(worksheet.get_all_values)
+            self._sheet_cache[cache_key] = (now, data)
+            return data
+        except Exception as e:
+            logger.error(f"Error fetching worksheet values for {date_str}: {e}")
+            # If we have stale data, returns it as a fallback instead of failing
+            if cache_key in self._sheet_cache:
+                logger.warning(f"Returning stale data for {date_str} due to API error.")
+                return self._sheet_cache[cache_key][1]
+            return []
 
     def _validate_sheet_columns(self, header_row: list):
         """
@@ -90,7 +122,7 @@ class SeaPlanService:
         if not sheet:
             return []
             
-        all_values = await asyncio.to_thread(sheet.get_all_values)
+        all_values = await self._get_worksheet_values(target_date)
         
         if all_values:
             self._validate_sheet_columns(all_values[0])
@@ -191,7 +223,7 @@ class SeaPlanService:
             if not sheet:
                 continue
             
-            all_values = await asyncio.to_thread(sheet.get_all_values)
+            all_values = await self._get_worksheet_values(target_date)
             for row in all_values:
                 if len(row) < 8:
                     continue
@@ -215,7 +247,7 @@ class SeaPlanService:
             if not sheet:
                 continue
             
-            all_values = await asyncio.to_thread(sheet.get_all_values)
+            all_values = await self._get_worksheet_values(target_date)
             
             # Find land section start
             land_start = -1
@@ -248,7 +280,7 @@ class SeaPlanService:
         if not sheet:
             return []
             
-        all_values = await asyncio.to_thread(sheet.get_all_values)
+        all_values = await self._get_worksheet_values(target_date)
         
         land_start = -1
         for i, row in enumerate(all_values):
@@ -377,7 +409,7 @@ class SeaPlanService:
         if not sheet:
             return []
 
-        all_values = await asyncio.to_thread(sheet.get_all_values)
+        all_values = await self._get_worksheet_values(target_date)
         guests = []
         
         for r in all_values:
