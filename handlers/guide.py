@@ -8,6 +8,7 @@ from database.db import update_user_activity
 from utils.keyboards import get_schedule_keyboard, get_sea_plan_keyboard, get_land_plan_keyboard
 from loguru import logger
 import datetime
+from utils.message_utils import send_long_message
 
 router = Router()
 
@@ -94,22 +95,22 @@ async def process_sea_query(callback: types.CallbackQuery):
         response = f"🌊 <b>План на море ({target_date.strftime('%d.%m')})</b>\n\n"
         
         for plan in plans:
-            response += f"🚢 <b>Лодка:</b> {plan['boat']}\n"
-            response += f"⚓️ <b>Пирс:</b> {plan['pier'] or '---'}\n"
-            response += f"👤 <b>Thai Guide:</b> {plan['thai_guide'] or '---'}\n"
-            response += f"👥 <b>Гид(ы):</b> {', '.join(plan['guides_list'])}\n"
+            response += f"🚢 <b>Лодка:</b> {plan.boat}\n"
+            response += f"⚓️ <b>Пирс:</b> {plan.pier or '---'}\n"
+            response += f"👤 <b>Thai Guide:</b> {plan.thai_guide or '---'}\n"
+            response += f"👥 <b>Гид(ы):</b> {', '.join([g.full_info for g in plan.guides])}\n"
             response += f"📝 <b>Программы:</b>\n"
-            for prog in plan['programs']:
-                prog_text = f"{prog['name']} ({prog['pax']} pax)"
-                if len(plan['guides_list']) > 1 and prog['guide']:
-                    response += f"  • {prog_text} - {prog['short_guide']}\n"
+            for prog in plan.programs:
+                prog_text = f"{prog.name} ({prog.pax} pax)"
+                if len(plan.guides) > 1 and prog.guide:
+                    response += f"  • {prog_text} - {prog.short_guide}\n"
                 else:
                     response += f"  • {prog_text}\n"
-            response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n\n"
+            response += f"📊 <b>Total Pax:</b> {plan.total_pax}\n\n"
         
         # Add a Guest List button if there are programs 
         guest_list_btn = None
-        has_programs = any(len(p['programs']) > 0 for p in plans)
+        has_programs = any(len(p.programs) > 0 for p in plans)
         if has_programs:
             builder = InlineKeyboardBuilder()
             builder.button(text="📋 Список гостей", callback_data=f"guestlist_guide_{target_date.strftime('%d.%m')}")
@@ -173,9 +174,9 @@ async def process_guest_list_guide(callback: types.CallbackQuery):
 
     program_names = []
     for plan in plans:
-        for prog in plan['programs']:
-            if prog['name'] not in program_names:
-                program_names.append(prog['name'])
+        for prog in plan.programs:
+            if prog.name not in program_names:
+                program_names.append(prog.name)
 
     if not program_names:
         await callback.answer("У вас нет программ на эту дату.", show_alert=True)
@@ -191,34 +192,29 @@ async def process_guest_list_guide(callback: types.CallbackQuery):
 
     response = f"📋 <b>Список гостей ({date_str})</b>:\n\n"
     
-    for item in guest_list:
-        pname = item['program_name']
-        guests = item['guests']
+    # Group guests by program
+    grouped_guests = {}
+    for g in guest_list:
+        if g.program not in grouped_guests:
+            grouped_guests[g.program] = []
+        grouped_guests[g.program].append(g)
+
+    for pname, guests in grouped_guests.items():
         response += f"🔹 <b>Program: {pname}</b>\n"
-        
         for g in guests:
-            response += f"  • <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
-            if g['pickup']:
-                response += f"    <b>Pickup:</b> {g['pickup']}\n"
-            response += f"    <b>Hotel:</b> {g['hotel']} (RM: {g['room']})\n"
-            response += f"    <b>Name:</b> <code>{g['name']}</code>\n"
-            if g['phone']:
-                response += f"    <b>Phone:</b> <code>{g['phone']}</code>\n"
-            if g['remarks']:
-                response += f"    <b>Remarks:</b> {g['remarks']}\n"
-            response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
+            response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
+            if g.pickup:
+                response += f"    <b>Pickup:</b> {g.pickup}\n"
+            response += f"    <b>Hotel:</b> {g.hotel} (RM: {g.room})\n"
+            response += f"    <b>Name:</b> <code>{g.name}</code>\n"
+            if g.phone and g.phone != "-":
+                response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
+            if g.remarks and g.remarks != "-":
+                response += f"    <b>Remarks:</b> {g.remarks}\n"
+            response += f"    💰 <b>COT:</b> <code>{g.cot}</code>\n"
             response += "\n"
     
-    # Split into chunks if needed (Telegram 4096 char limit)
-    MAX_LEN = 4096
-    while response:
-        chunk = response[:MAX_LEN]
-        if len(response) > MAX_LEN:
-            split_at = chunk.rfind("\n")
-            if split_at > 0:
-                chunk = response[:split_at]
-        await callback.message.answer(chunk, parse_mode="HTML")
-        response = response[len(chunk):].lstrip("\n")
+    await send_long_message(callback.message, response)
 
 @router.callback_query(F.data.startswith("land_"))
 async def process_land_plan_guide(callback: types.CallbackQuery):
@@ -240,42 +236,33 @@ async def process_land_plan_guide(callback: types.CallbackQuery):
         return
 
     for plan in plans:
-        response = f"🚐 <b>Job Order: {plan['program']}</b>\n"
-        response += f"📅 <b>Date:</b> {plan['date']}\n\n"
+        response = f"🚐 <b>Job Order: {plan.program}</b>\n"
+        response += f"📅 <b>Date:</b> {plan.date}\n\n"
         
-        if plan['guides']:
+        if plan.guides:
             response += "👤 <b>Guide(s):</b>\n"
-            for g in plan['guides']:
-                me_tag = " (ВЫ)" if g['is_me'] else ""
-                response += f"  • {g['full_info']}{me_tag} (P/U: {g['pickup_time']} @ {g['pickup_location']})\n"
+            for g in plan.guides:
+                me_tag = " (ВЫ)" if g.is_me else ""
+                response += f"  • {g.full_info}{me_tag} (P/U: {g.pickup_time} @ {g.pickup_location})\n"
             response += "\n"
             
-        if plan['bus']:
-            response += f"🚌 <b>Bus:</b> <code>{plan['bus']}</code>\n"
-        if plan['driver']:
-            response += f"👨‍✈️ <b>Driver:</b> {plan['driver']}\n"
+        if plan.bus:
+            response += f"🚌 <b>Bus:</b> <code>{plan.bus}</code>\n"
+        if plan.driver:
+            response += f"👨‍✈️ <b>Driver:</b> {plan.driver}\n"
         
-        if plan['guests']:
+        if plan.guests:
             response += "\n👥 <b>Guest List:</b>\n\n"
-            for g in plan['guests']:
-                response += f"  • <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
-                response += f"    <b>Pickup:</b> {g['pickup']}\n"
-                response += f"    <b>Hotel:</b> {g['hotel']} ({g['area']}) (RM: {g['room']})\n"
-                response += f"    <b>Name:</b> <code>{g['name']}</code>\n"
-                if g['phone'] and g['phone'] != "-":
-                    response += f"    <b>Phone:</b> <code>{g['phone']}</code>\n"
-                if g['remarks'] and g['remarks'] != "-":
-                    response += f"    <b>Remarks:</b> {g['remarks']}\n"
-                response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
+            for g in plan.guests:
+                response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
+                response += f"    <b>Pickup:</b> {g.pickup}\n"
+                response += f"    <b>Hotel:</b> {g.hotel} ({g.area}) (RM: {g.room})\n"
+                response += f"    <b>Name:</b> <code>{g.name}</code>\n"
+                if g.phone and g.phone != "-":
+                    response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
+                if g.remarks and g.remarks != "-":
+                    response += f"    <b>Remarks:</b> {g.remarks}\n"
+                response += f"    💰 <b>COT:</b> <code>{g.cot}</code>\n"
                 response += "\n"
         
-        # Split into chunks if needed (Telegram 4096 char limit)
-        MAX_LEN = 4096
-        while response:
-            chunk = response[:MAX_LEN]
-            if len(response) > MAX_LEN:
-                split_at = chunk.rfind("\n")
-                if split_at > 0:
-                    chunk = response[:split_at]
-            await callback.message.answer(chunk, parse_mode="HTML")
-            response = response[len(chunk):].lstrip("\n")
+        await send_long_message(callback.message, response)

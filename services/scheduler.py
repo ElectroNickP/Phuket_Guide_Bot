@@ -74,8 +74,8 @@ async def cache_user_sea_schedule(session, bot: Bot, user: User, target_date: da
         # Serialize the plan into a comparable string
         plan_strs = []
         for p in plans:
-            boat = p['boat']
-            progs = ", ".join([f"{prog['name']} ({prog['pax']}pax)" for prog in p['programs']])
+            boat = p.boat
+            progs = ", ".join([f"{prog.name} ({prog.pax}pax)" for prog in p.programs])
             plan_strs.append(f"🚢 {boat}: {progs}")
         current_program = "\n".join(plan_strs)
         

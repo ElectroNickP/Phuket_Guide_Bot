@@ -14,20 +14,8 @@ import re
 import datetime
 import html
 from services.sea_plan import sea_plan_service
+from utils.message_utils import send_long_message
 
-MAX_MSG_LEN = 4096
-
-async def send_long_message(message: types.Message, text: str, parse_mode: str = "HTML", **kwargs):
-    """Splits and sends a message that may exceed Telegram's 4096 character limit."""
-    while text:
-        chunk = text[:MAX_MSG_LEN]
-        # Try to split at the last newline to avoid cutting mid-line
-        if len(text) > MAX_MSG_LEN:
-            split_at = chunk.rfind("\n")
-            if split_at > 0:
-                chunk = text[:split_at]
-        await message.answer(chunk, parse_mode=parse_mode, **kwargs)
-        text = text[len(chunk):].lstrip("\n")
 
 
 class IsAdminFilter(BaseFilter):
@@ -263,17 +251,17 @@ async def _send_admin_sea_plans_single(target_username: str, date: datetime.date
             day_response = f"👁 <b>Архив/Мониторинг МОРЕ: @{target_username}</b>\n\n"
             day_response += f"📅 <b>Дата: {date_str}</b>\n"
             for plan in plans:
-                day_response += f"🚢 <b>Лодка:</b> {plan['boat']}\n"
-                day_response += f"⚓️ <b>Пирс:</b> {plan['pier'] or '---'}\n"
-                day_response += f"👤 <b>Thai Guide:</b> {plan['thai_guide'] or '---'}\n"
-                day_response += f"👥 <b>Гид(ы):</b> {', '.join(plan['guides_list'])}\n"
+                day_response += f"🚢 <b>Лодка:</b> {plan.boat}\n"
+                day_response += f"⚓️ <b>Пирс:</b> {plan.pier or '---'}\n"
+                day_response += f"👤 <b>Thai Guide:</b> {plan.thai_guide or '---'}\n"
+                day_response += f"👥 <b>Гид(ы):</b> {', '.join([g.full_info for g in plan.guides])}\n"
                 day_response += f"📝 <b>Программы:</b>\n"
-                for prog in plan['programs']:
-                    prog_text = f"{prog['name']} ({prog['pax']} pax)"
-                    if len(plan['guides_list']) > 1 and prog.get('short_guide'):
-                        prog_text += f" - {prog['short_guide']}"
+                for prog in plan.programs:
+                    prog_text = f"{prog.name} ({prog.pax} pax)"
+                    if len(plan.guides) > 1 and prog.short_guide:
+                        prog_text += f" - {prog.short_guide}"
                     day_response += f"  • {prog_text}\n"
-                day_response += f"📊 <b>Total Pax:</b> {plan['total_pax']}\n"
+                day_response += f"📊 <b>Total Pax:</b> {plan.total_pax}\n"
             
             builder = InlineKeyboardBuilder()
             builder.button(text="📋 Список гостей", callback_data=f"guestlist_admin_{date_str}_{target_username}")
@@ -416,32 +404,32 @@ async def _send_admin_land_plans(username: str, target_date: datetime.date, plan
 
     for plan in plans:
         response = f"🚐 <b>ADMIN VIEW: @{username}</b>\n"
-        response += f"🔹 <b>Program: {plan['program']}</b>\n"
-        response += f"📅 <b>Date:</b> {plan['date']}\n\n"
+        response += f"🔹 <b>Program: {plan.program}</b>\n"
+        response += f"📅 <b>Date:</b> {plan.date}\n\n"
         
-        if plan['guides']:
+        if plan.guides:
             response += "👤 <b>Guide(s):</b>\n"
-            for g in plan['guides']:
-                response += f"  • {g['full_info']} (P/U: {g['pickup_time']} @ {g['pickup_location']})\n"
+            for g in plan.guides:
+                response += f"  • {g.full_info} (P/U: {g.pickup_time} @ {g.pickup_location})\n"
             response += "\n"
             
-        if plan['bus']:
-            response += f"🚌 <b>Bus:</b> <code>{plan['bus']}</code>\n"
-        if plan['driver']:
-            response += f"👨‍✈️ <b>Driver:</b> {plan['driver']}\n"
+        if plan.bus:
+            response += f"🚌 <b>Bus:</b> <code>{plan.bus}</code>\n"
+        if plan.driver:
+            response += f"👨‍✈️ <b>Driver:</b> {plan.driver}\n"
         
-        if plan['guests']:
+        if plan.guests:
             response += "\n👥 <b>Guest List:</b>\n\n"
-            for g in plan['guests']:
-                response += f"  • <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
-                response += f"    <b>Pickup:</b> {g['pickup']}\n"
-                response += f"    <b>Hotel:</b> {g['hotel']} ({g['area']}) (RM: {g['room']})\n"
-                response += f"    <b>Name:</b> <code>{g['name']}</code>\n"
-                if g['phone'] and g['phone'] != "-":
-                    response += f"    <b>Phone:</b> <code>{g['phone']}</code>\n"
-                if g['remarks'] and g['remarks'] != "-":
-                    response += f"    <b>Remarks:</b> {g['remarks']}\n"
-                response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
+            for g in plan.guests:
+                response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
+                response += f"    <b>Pickup:</b> {g.pickup}\n"
+                response += f"    <b>Hotel:</b> {g.hotel} ({g.area}) (RM: {g.room})\n"
+                response += f"    <b>Name:</b> <code>{g.name}</code>\n"
+                if g.phone and g.phone != "-":
+                    response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
+                if g.remarks and g.remarks != "-":
+                    response += f"    <b>Remarks:</b> {g.remarks}\n"
+                response += f"    💰 <b>COT:</b> <code>{g.cot}</code>\n"
                 response += "\n"
         
         await send_long_message(message, response, parse_mode="HTML")
@@ -552,9 +540,9 @@ async def process_guest_list_admin(callback: types.CallbackQuery):
 
     program_names = []
     for plan in plans:
-        for prog in plan['programs']:
-            if prog['name'] not in program_names:
-                program_names.append(prog['name'])
+        for prog in plan.programs:
+            if prog.name not in program_names:
+                program_names.append(prog.name)
 
     if not program_names:
         await callback.answer("У гида нет программ на эту дату.", show_alert=True)
@@ -570,22 +558,26 @@ async def process_guest_list_admin(callback: types.CallbackQuery):
 
     response = f"📋 <b>Список гостей ({date_str}) для @{tgt_username}</b>:\n\n"
     
-    for item in guest_list:
-        pname = item['program_name']
-        guests = item['guests']
+    # Group guests by program
+    grouped_guests = {}
+    for g in guest_list:
+        if g.program not in grouped_guests:
+            grouped_guests[g.program] = []
+        grouped_guests[g.program].append(g)
+
+    for pname, guests in grouped_guests.items():
         response += f"🔹 <b>Program: {pname}</b>\n"
-        
         for g in guests:
-            response += f"  • <b>V/C:</b> <code>{g['voucher']}</code> | <b>Pax:</b> {g['pax']}\n"
-            if g['pickup']:
-                response += f"    <b>Pickup:</b> {g['pickup']}\n"
-            response += f"    <b>Hotel:</b> {g['hotel']} (RM: {g['room']})\n"
-            response += f"    <b>Name:</b> <code>{g['name']}</code>\n"
-            if g['phone']:
-                response += f"    <b>Phone:</b> <code>{g['phone']}</code>\n"
-            if g['remarks']:
-                response += f"    <b>Remarks:</b> {g['remarks']}\n"
-            response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
+            response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
+            if g.pickup:
+                response += f"    <b>Pickup:</b> {g.pickup}\n"
+            response += f"    <b>Hotel:</b> {g.hotel} (RM: {g.room})\n"
+            response += f"    <b>Name:</b> <code>{g.name}</code>\n"
+            if g.phone and g.phone != "-":
+                response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
+            if g.remarks and g.remarks != "-":
+                response += f"    <b>Remarks:</b> {g.remarks}\n"
+            response += f"    💰 <b>COT:</b> <code>{g.cot}</code>\n"
             response += "\n"
     
     await callback.message.answer(response, parse_mode="HTML")

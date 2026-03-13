@@ -8,6 +8,8 @@ from database.models import AppSettings
 from sqlalchemy import select
 import datetime
 import re
+from typing import List
+from database.dto import GuestDTO, GuideDTO, LandPlanDTO, SeaPlanDTO, ProgramDTO
 
 class SeaPlanService:
     def __init__(self):
@@ -80,55 +82,40 @@ class SeaPlanService:
                     "Columns may have shifted — verify sheet structure!"
                 )
 
-    async def get_guide_sea_plan(self, username: str, target_date: datetime.date):
+    async def get_guide_sea_plan(self, username: str, target_date: datetime.date) -> List[SeaPlanDTO]:
         """
         Parses the Sea Plan for a specific guide, grouping all data by boat.
         """
         sheet = await self.get_date_worksheet(target_date)
         if not sheet:
-            return None
+            return []
             
-        # Run blocking call in thread pool
         all_values = await asyncio.to_thread(sheet.get_all_values)
         
-        # Defensive column validation on the first non-empty row
         if all_values:
             self._validate_sheet_columns(all_values[0])
-            for idx, r in enumerate(all_values[:25]):
-                logger.debug(f"ROW {idx}: {r}")
 
-        # boat_id (pier+boat name) -> aggregated_info
         boats_data = {}
-        
         current_boat = None
         current_pier = None
         current_thai_guide = None
         
-        # Columns (0-indexed):
-        # 0: Date, 1: Thai Guide/Note, 4: Program, 5: Pax, 7: Guide, 13: Pier, 15: Boat
         for i, row in enumerate(all_values):
-            # 1. Stop Condition Check (Must happen BEFORE len check, as TOTAL row is short)
-            # We enforce i > 250 because the very first row is 'JOB ORDER - SEA TOURS' 
-            # and guest lists can occasionally have 'TOTAL' or 'JOB ORDER' in remarks.
-            row_program_raw = row[4].strip() if len(row) > 4 else ""
-            if i > 250 and (row_program_raw == "TOTAL" or row_program_raw.startswith("JOB ORDER")):
-                logger.debug(f"Reached end of boat schedule at row {i}: {row_program_raw}")
-                break
+            if i > 250 and len(row) > 4:
+                row_prog_raw = row[4].strip()
+                if row_prog_raw == "TOTAL" or row_prog_raw.startswith("JOB ORDER"):
+                    break
 
-            # 2. Main Boat Data Check
             if len(row) < 16: continue
             
-            row_program = row_program_raw
             row_boat = row[15].strip()
             row_pier = row[13].strip()
             row_thai = row[1].strip()
-            row_date = row[0].strip()
+            row_date = row[0].strip() or target_date.strftime("%d.%m")
 
-            # COMEBACK BOATS is a section separator — skip it, don't break
-            if "COMEBACK BOATS" in row_program.upper():
+            if "COMEBACK BOATS" in row[4].strip().upper():
                 continue
 
-            # Real boat rows have a boat name in col 15
             if row_boat:
                 current_boat = row_boat
                 current_pier = row_pier
@@ -141,71 +128,57 @@ class SeaPlanService:
             prog_name = row[4].strip()
             pax_str = row[5].strip()
 
-            # Skip empty programs without guides
             if not prog_name and not guide_str:
                 continue
 
             boat_key = f"{current_pier}_{current_boat}"
             if boat_key not in boats_data:
-                boats_data[boat_key] = {
-                    "date": row_date or target_date.strftime("%d.%m"),
-                    "boat": current_boat,
-                    "pier": current_pier,
-                    "thai_guide": current_thai_guide,
-                    "total_pax": 0,
-                    "programs": [],
-                    "guides": set(),
-                    "assigned_usernames": set()
-                }
+                boats_data[boat_key] = SeaPlanDTO(
+                    boat=current_boat,
+                    pier=current_pier,
+                    date=row_date,
+                    thai_guide=current_thai_guide,
+                    programs=[],
+                    guides=[],
+                    total_pax=0,
+                    is_assigned=False
+                )
             
-            # Aggregate program
+            dto = boats_data[boat_key]
+            
             if prog_name:
                 pax_val = 0
                 try:
                     pax_val = int(pax_str)
-                except (ValueError, TypeError):
+                except:
                     pass
                 
                 short_guide = guide_str
-                # Attempt to extract just the @username
                 match_uname = re.search(r'(@\w+)', guide_str)
                 if match_uname:
                     short_guide = match_uname.group(1)
-                
-                boats_data[boat_key]["programs"].append({
-                    "name": prog_name,
-                    "pax": pax_str,
-                    "guide": guide_str,
-                    "short_guide": short_guide
-                })
-                boats_data[boat_key]["total_pax"] += pax_val
 
-            # Aggregate guide
+                dto.programs.append(ProgramDTO(
+                    name=prog_name,
+                    pax=pax_str,
+                    guide=guide_str,
+                    short_guide=short_guide
+                ))
+                dto.total_pax += pax_val
+
             if guide_str:
                 matches = re.findall(r'@(\w+)', guide_str)
-                for uname_raw in matches:
-                    uname = uname_raw.lower()
-                    boats_data[boat_key]["assigned_usernames"].add(uname)
-                    boats_data[boat_key]["guides"].add(guide_str)
+                is_me = False
+                for uname in matches:
+                    if uname.lower() == username.lower():
+                        is_me = True
+                        dto.is_assigned = True
+                
+                # Check if guide already in list
+                if not any(g.full_info == guide_str for g in dto.guides):
+                    dto.guides.append(GuideDTO(full_info=guide_str, is_me=is_me))
 
-        # Filter boats where the requested guide is assigned
-        username_lower = username.lower()
-        result_plans = []
-        
-        for boat_key, data in boats_data.items():
-            if username_lower in data["assigned_usernames"]:
-                formatted_plan = {
-                    "date": data["date"],
-                    "boat": data["boat"],
-                    "pier": data["pier"],
-                    "thai_guide": data["thai_guide"],
-                    "total_pax": data["total_pax"],
-                    "guides_list": sorted(list(data["guides"])),
-                    "programs": data["programs"]  # Raw list for conditional formatting in handlers
-                }
-                result_plans.append(formatted_plan)
-        
-        return result_plans
+        return [dto for dto in boats_data.values() if dto.is_assigned]
 
     async def get_active_sea_guides(self, target_dates: list[datetime.date]) -> list[str]:
         """
@@ -267,13 +240,13 @@ class SeaPlanService:
                     
         return sorted(list(all_usernames))
         
-    async def get_guide_land_plan(self, username: str, target_date: datetime.date):
+    async def get_guide_land_plan(self, username: str, target_date: datetime.date) -> List[LandPlanDTO]:
         """
         Parses the Land Joined Tours section for a specific guide.
         """
         sheet = await self.get_date_worksheet(target_date)
         if not sheet:
-            return None
+            return []
             
         all_values = await asyncio.to_thread(sheet.get_all_values)
         
@@ -285,15 +258,12 @@ class SeaPlanService:
                 break
         
         if land_start == -1:
-            return None
+            return []
 
-        # Blocks will store data for each "Bus"
         blocks = []
         current_block = None
-        
         username_lower = username.lower()
         
-        # We need to scan for all guide identifiers to strictly filter them out from guest lists
         all_guide_identifiers = set()
         for i in range(land_start + 1, len(all_values)):
             row = all_values[i]
@@ -308,9 +278,8 @@ class SeaPlanService:
         for i in range(land_start + 1, len(all_values)):
             row = all_values[i]
             
-            # Stop condition: reached next day's section or summary
             if row and row[0] and target_date.strftime("%d.%m") not in row[0]:
-                if i > land_start + 50: # Only stop if we've scanned a decent amount
+                if i > land_start + 50:
                     break
 
             row_str = " ".join([str(v) for v in row if v]).upper()
@@ -319,14 +288,12 @@ class SeaPlanService:
 
             if len(row) < 16: continue
             
-            col1 = row[1].strip() # Agent / Guide Handle
-            col2 = row[2].strip() # Voucher
-            col3 = row[3].strip() # P/U Time / Bus No
-            col4 = row[4].strip() # Hotel / Program
-            col7 = row[7].strip() # Guest Name / Guide Short Name
+            col1 = row[1].strip()
+            col2 = row[2].strip()
+            col3 = row[3].strip()
+            col4 = row[4].strip()
+            col7 = row[7].strip()
             
-            # 1. Detect Program/Bus Header (e.g. "Krabi b1", "Bus 1", "B2")
-            # Logic: Col 3 or 4 contains " b" followed by digits (case insensitive), or "Bus \d+"
             is_header = False
             if col4 and (re.search(r' b\d+', col4, re.IGNORECASE) or re.search(r'Bus \d+', col4, re.IGNORECASE)):
                 is_header = True
@@ -336,83 +303,72 @@ class SeaPlanService:
             if is_header and not ('@' in col1):
                 if current_block:
                     blocks.append(current_block)
-                current_block = {
-                    "program": col4,
-                    "date": target_date.strftime("%d.%m"),
-                    "guides": [],
-                    "bus": None,
-                    "driver": None,
-                    "guests": [],
-                    "is_assigned": False
-                }
+                current_block = LandPlanDTO(
+                    program=col4,
+                    date=target_date.strftime("%d.%m"),
+                    guides=[],
+                    guests=[],
+                    is_assigned=False
+                )
                 continue
             
             if not current_block:
                 continue
 
-            # 2. Identify Guide Row
             if '@' in col1:
                 is_me = False
                 uname_match = re.search(r'@(\w+)', col1)
                 if uname_match and uname_match.group(1).lower() == username_lower:
                     is_me = True
-                    current_block["is_assigned"] = True
+                    current_block.is_assigned = True
                 
-                # Extract Pickup Time from Col 3
                 pu_time = col3
                 if ' ' in pu_time: pu_time = pu_time.split(' ')[0]
                 
-                current_block["guides"].append({
-                    "full_info": col1,
-                    "short_name": col7,
-                    "pickup_time": pu_time,
-                    "pickup_location": col4,
-                    "is_me": is_me
-                })
+                current_block.guides.append(GuideDTO(
+                    full_info=col1,
+                    short_name=col7,
+                    pickup_time=pu_time,
+                    pickup_location=col4,
+                    is_me=is_me
+                ))
                 continue
 
-            # 3. Identify Bus/Driver Row
             if 'Bus' in col3 or (col2 and 'Bus' in col2):
-                current_block["bus"] = col3 if 'Bus' in col3 else col2
-                current_block["driver"] = col7
+                current_block.bus = col3 if 'Bus' in col3 else col2
+                current_block.driver = col7
                 continue
 
-            # 4. Identify Guest Row
-            # Logic: Col 7 is not empty and not in the guide identifier set
             if col7 and col7.lower() not in all_guide_identifiers:
-                # Calculate Pax (Cols 9, 10, 11)
                 try:
                     pax_a = int(row[9]) if row[9].isdigit() else 0
                     pax_c = int(row[10]) if row[10].isdigit() else 0
                     pax_i = int(row[11]) if row[11].isdigit() else 0
-                    # For land tours, we often show it as A/C/I
                     pax_str = f"{pax_a}/{pax_c}/{pax_i}"
                     total_pax = pax_a + pax_c + pax_i
-                    if total_pax == 0: continue # Skip zero pax rows
-                except (ValueError, IndexError):
+                    if total_pax == 0: continue
+                except:
                     continue
 
-                current_block["guests"].append({
-                    "voucher": col2 or "N/A",
-                    "pickup": col3,
-                    "hotel": col4,
-                    "area": row[5].strip() if len(row) > 5 else "-",
-                    "room": row[6].strip() or "-",
-                    "name": col7,
-                    "phone": row[8].strip() or "-",
-                    "pax": pax_str,
-                    "cot": row[14].strip() if len(row) > 14 else "0",
-                    "remarks": row[15].strip() if len(row) > 15 else "-"
-                })
+                current_block.guests.append(GuestDTO(
+                    voucher=col2 or "N/A",
+                    pickup=col3,
+                    hotel=col4,
+                    area=row[5].strip() if len(row) > 5 else "-",
+                    room=row[6].strip() or "-",
+                    name=col7,
+                    phone=row[8].strip() or "-",
+                    pax=pax_str,
+                    cot=row[14].strip() if len(row) > 14 else "0",
+                    remarks=row[15].strip() if len(row) > 15 else "-"
+                ))
 
         if current_block:
             blocks.append(current_block)
 
-        # Filter blocks where the guide is assigned
-        my_blocks = [b for b in blocks if b["is_assigned"]]
-        return my_blocks if my_blocks else None
+        return [b for b in blocks if b.is_assigned]
 
-    async def get_guest_list(self, target_date: datetime.date, program_names: list[str]) -> list[dict]:
+    async def get_guest_list(self, target_date: datetime.date, program_names: list[str]) -> List[GuestDTO]:
         """
         Retrieves a detailed guest list from the top section of the sheet
         based on exact matches with the given program names.
@@ -422,43 +378,28 @@ class SeaPlanService:
             return []
 
         all_values = await asyncio.to_thread(sheet.get_all_values)
-        
-        # We'll return a list of guests
         guests = []
         
-        # Scan through rows.
         for r in all_values:
-            # Skip empty or short rows
             if len(r) < 16:
                 continue
                 
             program_str = r[13].strip()
-            # If the row has a program that is in our target list
             if program_str and program_str in program_names:
-                guests.append({
-                    "program": program_str,
-                    "agent": r[1].strip(),
-                    "voucher": r[2].strip(),
-                    "pickup": r[3].strip(),
-                    "hotel": r[4].strip(),
-                    "room": r[6].strip(),
-                    "name": r[7].strip(),
-                    "phone": r[8].strip(),
-                    "pax": f"{r[9].strip() or '0'}/{r[10].strip() or '0'}/{r[11].strip() or '0'}",
-                    "cot": r[14].strip() if len(r) > 14 else "0",
-                    "remarks": r[15].strip(),
-                })
+                guests.append(GuestDTO(
+                    program=program_str,
+                    agent=r[1].strip(),
+                    voucher=r[2].strip(),
+                    pickup=r[3].strip(),
+                    hotel=r[4].strip(),
+                    room=r[6].strip(),
+                    name=r[7].strip(),
+                    phone=r[8].strip(),
+                    pax=f"{r[9].strip() or '0'}/{r[10].strip() or '0'}/{r[11].strip() or '0'}",
+                    cot=r[14].strip() if len(r) > 14 else "0",
+                    remarks=r[15].strip(),
+                ))
                 
-        # Return grouped by program
-        grouped_guests = {}
-        for p in program_names:
-            grouped_guests[p] = []
-            
-        for g in guests:
-            if g["program"] in grouped_guests:
-                grouped_guests[g["program"]].append(g)
-                
-        # Only return non-empty programs
-        return [{"program_name": k, "guests": v} for k, v in grouped_guests.items() if v]
+        return guests
 
 sea_plan_service = SeaPlanService()
