@@ -209,7 +209,16 @@ async def process_guest_list_guide(callback: types.CallbackQuery):
             response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
             response += "\n"
     
-    await callback.message.answer(response, parse_mode="HTML")
+    # Split into chunks if needed (Telegram 4096 char limit)
+    MAX_LEN = 4096
+    while response:
+        chunk = response[:MAX_LEN]
+        if len(response) > MAX_LEN:
+            split_at = chunk.rfind("\n")
+            if split_at > 0:
+                chunk = response[:split_at]
+        await callback.message.answer(chunk, parse_mode="HTML")
+        response = response[len(chunk):].lstrip("\n")
 
 @router.callback_query(F.data.startswith("land_"))
 async def process_land_plan_guide(callback: types.CallbackQuery):
@@ -260,4 +269,13 @@ async def process_land_plan_guide(callback: types.CallbackQuery):
                 response += f"    💰 <b>COT:</b> <code>{g['cot']}</code>\n"
                 response += "\n"
         
-        await callback.message.answer(response, parse_mode="HTML")
+        # Split into chunks if needed (Telegram 4096 char limit)
+        MAX_LEN = 4096
+        while response:
+            chunk = response[:MAX_LEN]
+            if len(response) > MAX_LEN:
+                split_at = chunk.rfind("\n")
+                if split_at > 0:
+                    chunk = response[:split_at]
+            await callback.message.answer(chunk, parse_mode="HTML")
+            response = response[len(chunk):].lstrip("\n")
