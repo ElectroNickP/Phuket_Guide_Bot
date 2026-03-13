@@ -297,7 +297,7 @@ class SeaPlanService:
             is_header = False
             if col4 and (re.search(r' b\d+', col4, re.IGNORECASE) or re.search(r'Bus \d+', col4, re.IGNORECASE)):
                 is_header = True
-            elif col3 and (re.search(r' b\d+', col3, re.IGNORECASE) or re.search(r'Bus \d+', col3, re.IGNORECASE)):
+            elif col3 and (re.search(r' b\d+', col3, re.IGNORECASE) or re.search(r'Bus \d+', col3, re.IGNORECASE)) and not col7:
                 is_header = True
                 
             if is_header and not ('@' in col1):
