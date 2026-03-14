@@ -223,7 +223,7 @@ class SeaPlanService:
             if not sheet:
                 continue
             
-            all_values = await self._get_worksheet_values(target_date)
+            all_values = await self._get_worksheet_values(t_date)
             for row in all_values:
                 if len(row) < 8:
                     continue
@@ -247,7 +247,7 @@ class SeaPlanService:
             if not sheet:
                 continue
             
-            all_values = await self._get_worksheet_values(target_date)
+            all_values = await self._get_worksheet_values(t_date)
             
             # Find land section start
             land_start = -1
@@ -404,34 +404,81 @@ class SeaPlanService:
         """
         Retrieves a detailed guest list from the top section of the sheet
         based on exact matches with the given program names.
+        Handles "Comeback" programs by looking back at the previous day.
         """
         sheet = await self.get_date_worksheet(target_date)
         if not sheet:
             return []
 
-        all_values = await self._get_worksheet_values(target_date)
-        guests = []
+        # Categorize programs into current-day and previous-day (comebacks)
+        comeback_markers = ["COMEBACK", "ВЫВОЗ", "RETURN"]
         
-        for r in all_values:
-            if len(r) < 16:
-                continue
+        standard_progs_lower = set()
+        comeback_mapping_lower = {} # cleaned_name_lower -> original_name
+        
+        for p in program_names:
+            is_comeback = False
+            for marker in comeback_markers:
+                if marker.upper() in p.upper():
+                    # Clean the name: "COMEBACK 5 Pearls" -> "5 Pearls"
+                    cleaned = re.sub(rf'(?i)\b({marker})\b', '', p, flags=re.IGNORECASE).strip()
+                    cleaned = re.sub(r'^[\s\-\:]+', '', cleaned).strip()
+                    comeback_mapping_lower[cleaned.lower()] = p
+                    is_comeback = True
+                    break
+            
+            if not is_comeback:
+                standard_progs_lower.add(p.lower())
+
+        all_guests = []
+        
+        # 1. Fetch Guest List for standard programs (Current Day)
+        if standard_progs_lower:
+            current_values = await self._get_worksheet_values(target_date)
+            for r in current_values:
+                if len(r) < 14: continue
+                program_str = r[13].strip()
+                if program_str and program_str.lower() in standard_progs_lower:
+                    all_guests.append(self._parse_guest_row(r))
+
+        # 2. Fetch Guest List for comeback programs (Previous Day)
+        if comeback_mapping_lower:
+            prev_date = target_date - datetime.timedelta(days=1)
+            prev_values = await self._get_worksheet_values(prev_date)
+            if prev_values:
+                for r in prev_values:
+                    if len(r) < 14: continue
+                    program_str = r[13].strip()
+                    prog_lower = program_str.lower()
+                    
+                    # We also want to match if the plan has "5 Pearls" and the guest list has "5 Pearls b2"
+                    # or if the plan has "5 Pearls comfort" and guest list has "5 Pearls comfort"
+                    matched_orig = None
+                    for cleaned_lower, orig in comeback_mapping_lower.items():
+                        if prog_lower == cleaned_lower or prog_lower.startswith(cleaned_lower + " "):
+                            matched_orig = orig
+                            break
+                    
+                    if matched_orig:
+                        guest = self._parse_guest_row(r)
+                        guest.program = matched_orig
+                        all_guests.append(guest)
                 
-            program_str = r[13].strip()
-            if program_str and program_str in program_names:
-                guests.append(GuestDTO(
-                    program=program_str,
-                    agent=r[1].strip(),
-                    voucher=r[2].strip(),
-                    pickup=r[3].strip(),
-                    hotel=r[4].strip(),
-                    room=r[6].strip(),
-                    name=r[7].strip(),
-                    phone=r[8].strip(),
-                    pax=f"{r[9].strip() or '0'}/{r[10].strip() or '0'}/{r[11].strip() or '0'}",
-                    cot=r[14].strip() if len(r) > 14 else "0",
-                    remarks=r[15].strip(),
-                ))
-                
-        return guests
+        return all_guests
+
+    def _parse_guest_row(self, r: list) -> GuestDTO:
+        return GuestDTO(
+            program=r[13].strip(),
+            agent=r[1].strip(),
+            voucher=r[2].strip(),
+            pickup=r[3].strip(),
+            hotel=r[4].strip(),
+            room=r[6].strip(),
+            name=r[7].strip(),
+            phone=r[8].strip(),
+            pax=f"{r[9].strip() or '0'}/{r[10].strip() or '0'}/{r[11].strip() or '0'}",
+            cot=r[14].strip() if len(r) > 14 else "0",
+            remarks=r[15].strip(),
+        )
 
 sea_plan_service = SeaPlanService()

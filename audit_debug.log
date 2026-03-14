@@ -1,0 +1,79 @@
+2026-03-14 12:40:27.410 | INFO     | services.google_sheets:get_spreadsheet:39 - Opening spreadsheet: 1VzzL9hKRSwqga1nsjJ9Df2AlkSBVw_6zRorXDy_MURs
+2026-03-14 12:40:28.349 | INFO     | services.google_sheets:get_spreadsheet:46 - Successfully loaded spreadsheet: BTC Guide schedule
+2026-03-14 12:40:28.877 | INFO     | __main__:run_audit:341 - Pre-fetching monthly schedule...
+2026-03-14 12:40:29.795 | INFO     | services.google_sheets:parse_guides:131 - Parsed 56 staff and 41 freelance guides
+2026-03-14 12:40:29.795 | INFO     | __main__:run_audit:351 - Pre-fetching data for 14.03...
+2026-03-14 12:40:29.797 | INFO     | services.sea_plan:get_spreadsheet:43 - Opening Sea Plan spreadsheet: 155LXx2XlMwLBV8as8h3WIgLNO2n7TlUhK1Ki8T43eZI
+2026-03-14 12:40:31.124 | INFO     | services.sea_plan:get_spreadsheet:50 - Successfully loaded Sea Plan: 11-20 MARCH 2026
+2026-03-14 12:40:32.686 | INFO     | __main__:run_audit:351 - Pre-fetching data for 15.03...
+2026-03-14 12:40:36.566 | INFO     | __main__:run_audit:407 - Audit completed: 597 rows uploaded.
+DEBUG: Multi-day detection for row 19, day 14: 5 PEARLS
+DEBUG: Multi-day detection for row 24, day 14: 5 PEARLS
+DEBUG: Multi-day detection for row 63, day 14: CL1
+DEBUG: Multi-day detection for row 78, day 14: si2
+DEBUG: Multi-day detection for row 80, day 14: pps
+DEBUG: Multi-day detection for row 81, day 14: SI
+DEBUG: Multi-day detection for row 83, day 14: pps
+DEBUG: Multi-day detection for row 84, day 14: kl4
+DEBUG: Multi-day detection for row 88, day 14: KL3
+DEBUG: Multi-day detection for row 90, day 14: отпишется по раб дням 7-8
+DEBUG: Multi-day detection for row 107, day 14: KL2
+DEBUG: Multi-day detection for row 108, day 14: улетает
+DEBUG: Multi-day detection for row 109, day 14: SS2
+DEBUG: Multi-day detection for row 8, day 15: ovn
+DEBUG: Multi-day detection for row 9, day 15: FS
+DEBUG: Multi-day detection for row 10, day 15: RC
+DEBUG: Multi-day detection for row 11, day 15: TK
+DEBUG: Multi-day detection for row 14, day 15: CT3
+DEBUG: Multi-day detection for row 15, day 15: PPS3
+DEBUG: Multi-day detection for row 16, day 15: SI3
+DEBUG: Multi-day detection for row 17, day 15: PPS1
+DEBUG: Multi-day detection for row 18, day 15: PPS2
+DEBUG: Multi-day detection for row 19, day 15: 5 PEARLS
+DEBUG: Multi-day detection for row 20, day 15: CT2
+DEBUG: Multi-day detection for row 21, day 15: 4 PEARLS
+DEBUG: Multi-day detection for row 22, day 15: KL1
+DEBUG: Multi-day detection for row 25, day 15: PP
+DEBUG: Multi-day detection for row 26, day 15: KR2
+DEBUG: Multi-day detection for row 27, day 15: 4 PEARLS
+DEBUG: Multi-day detection for row 29, day 15: SI3
+DEBUG: Multi-day detection for row 30, day 15: PP OVN
+DEBUG: Multi-day detection for row 34, day 15: KR1
+DEBUG: Multi-day detection for row 35, day 15: MS
+DEBUG: Multi-day detection for row 37, day 15: CL1
+DEBUG: Multi-day detection for row 38, day 15: GLPT2
+DEBUG: Multi-day detection for row 39, day 15: RAF1
+DEBUG: Multi-day detection for row 41, day 15: SS1
+DEBUG: Multi-day detection for row 42, day 15: SS4
+DEBUG: Multi-day detection for row 43, day 15: KL4
+DEBUG: Multi-day detection for row 44, day 15: SS3
+DEBUG: Multi-day detection for row 45, day 15: GLPT1
+DEBUG: Multi-day detection for row 46, day 15: CLNSTD
+DEBUG: Multi-day detection for row 47, day 15: CT1
+DEBUG: Multi-day detection for row 48, day 15: KL3
+DEBUG: Multi-day detection for row 49, day 15: GLPT3
+DEBUG: Multi-day detection for row 50, day 15: RAF2
+DEBUG: Multi-day detection for row 51, day 15: AP1
+DEBUG: Multi-day detection for row 55, day 15: KL2
+DEBUG: Multi-day detection for row 57, day 15: GPS1
+DEBUG: Multi-day detection for row 58, day 15: GPT
+DEBUG: Multi-day detection for row 60, day 15: AW3
+DEBUG: Multi-day detection for row 61, day 15: RAF3
+DEBUG: Multi-day detection for row 63, day 15: CL1
+DEBUG: Multi-day detection for row 68, day 15: SI
+DEBUG: Multi-day detection for row 70, day 15: AW2
+DEBUG: Multi-day detection for row 78, day 15: si2
+DEBUG: Multi-day detection for row 79, day 15: CL2
+DEBUG: Multi-day detection for row 80, day 15: pps
+DEBUG: Multi-day detection for row 81, day 15: SI
+DEBUG: Multi-day detection for row 82, day 15: AP3
+DEBUG: Multi-day detection for row 83, day 15: pps
+DEBUG: Multi-day detection for row 84, day 15: kl4
+DEBUG: Multi-day detection for row 88, day 15: KL3
+DEBUG: Multi-day detection for row 90, day 15: отпишется по раб дням 7-8
+DEBUG: Multi-day detection for row 107, day 15: KL2
+DEBUG: Multi-day detection for row 108, day 15: улетает
+DEBUG: Multi-day detection for row 109, day 15: SS2
+
+📊 REPORT: https://docs.google.com/spreadsheets/d/1KgXnPnwV4gkh8f0cdr4-Aqu6yPNDaehTl836MZwT_8I/edit#gid=2128165179
+

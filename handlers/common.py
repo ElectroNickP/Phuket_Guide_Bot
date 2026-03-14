@@ -6,7 +6,7 @@ from utils.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from config import config
 from sqlalchemy import select
 from database.db import AsyncSessionLocal, update_user_activity
-from database.models import User, AppSettings
+from database.models import User, AppSettings, UserRole
 from services.google_sheets import google_sheets
 from services.scheduler import cache_user_schedule, cache_user_sea_schedule
 import datetime
@@ -69,17 +69,32 @@ async def cmd_start(message: types.Message, bot: Bot):
             await update_user_activity(message.from_user.id, "start")
         
         logger.debug(f"Determining keyboard for {message.from_user.id}")
-        is_admin = (message.from_user.id in config.admin_id_list)
+        is_pankonick = False
+        if message.from_user.username:
+            is_pankonick = message.from_user.username.lower() == "pankonick"
+
+        is_admin = (message.from_user.id in config.admin_id_list) or is_pankonick
         if not is_admin and message.from_user.username:
             is_admin = message.from_user.username.lower() in config.admin_username_list
             
         logger.debug(f"User {message.from_user.id} is_admin: {is_admin} (Username: {message.from_user.username})")
+        
+        # Update/Assign role in DB if admin
+        if is_admin:
+            async with AsyncSessionLocal() as session:
+                query = select(User).where(User.telegram_id == message.from_user.id)
+                result = await session.execute(query)
+                user = result.scalar_one_or_none()
+                if user:
+                    target_role = UserRole.SUPER_ADMIN if is_pankonick else UserRole.HEAD_OF_GUIDE
+                    if user.role != target_role:
+                        user.role = target_role
+                        await session.commit()
+                        logger.info(f"Updated role for {user.username} to {target_role}")
+
         if is_admin:
             logger.debug("Calling get_admin_menu_keyboard")
-            is_super_admin = False
-            if message.from_user.username:
-                is_super_admin = message.from_user.username.lower() == "pankonick"
-            kb = get_admin_menu_keyboard(is_super_admin=is_super_admin)
+            kb = get_admin_menu_keyboard(is_super_admin=is_pankonick)
         else:
             logger.debug("Calling get_main_menu_keyboard")
             kb = get_main_menu_keyboard()

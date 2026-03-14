@@ -1,0 +1,1 @@
+2026-03-14 12:39:27.636 | ERROR    | __main__:run_audit:318 - Failed to access report spreadsheet: APIError: [400]: Invalid requests[0].addSheet: A sheet with the name "Audit_14.03_12.39" already exists. Please enter another name.

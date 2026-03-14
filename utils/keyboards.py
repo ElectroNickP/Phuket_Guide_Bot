@@ -11,7 +11,9 @@ def get_main_menu_keyboard():
 def get_admin_menu_keyboard(is_super_admin: bool = False):
     keyboard = [
         [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="🌊 Мониторинг моря")],
-        [KeyboardButton(text="🚐 Мониторинг суши"), KeyboardButton(text="📊 Статистика")]
+        [KeyboardButton(text="🚐 Мониторинг суши"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="🔍 Тест-Аудит"), KeyboardButton(text="📋 Job Order")],
+        [KeyboardButton(text="📅 Общее расписание")]
     ]
     if is_super_admin:
         keyboard.append([KeyboardButton(text="⏱ Интервал"), KeyboardButton(text="📋 Логи")])
@@ -52,5 +54,19 @@ def get_land_plan_keyboard():
     buttons = [
         [InlineKeyboardButton(text="Сегодня", callback_data="land_today")],
         [InlineKeyboardButton(text="Завтра", callback_data="land_tomorrow")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_job_order_date_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="Сегодня", callback_data="jo_date_today")],
+        [InlineKeyboardButton(text="Завтра", callback_data="jo_date_tomorrow")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_general_schedule_date_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="Сегодня", callback_data="gs_date_today")],
+        [InlineKeyboardButton(text="Завтра", callback_data="gs_date_tomorrow")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

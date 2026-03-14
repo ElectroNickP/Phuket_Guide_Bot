@@ -5,16 +5,28 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database.db import AsyncSessionLocal
-from database.models import User, AppSettings
+from database.models import User, AppSettings, UserRole
+from utils.permissions import RoleFilter
 from services.google_sheets import google_sheets
 from sqlalchemy import select, update
 from loguru import logger
 from config import config
 import re
+import asyncio
 import datetime
 import html
 from services.sea_plan import sea_plan_service
+from services.image_generator import job_order_generator
 from utils.message_utils import send_long_message
+from utils.keyboards import get_job_order_date_keyboard, get_general_schedule_date_keyboard
+
+# List of all reply keyboard buttons to prevent state hijacking
+MENU_BUTTONS = [
+    "📅 Моё расписание", "🌊 План на море", "🚐 План на суше", "👤 Мой статус", "📝 Обратная связь",
+    "👁 Мониторинг гидов", "🌊 Мониторинга моря", "🚐 Мониторинг суши", "📊 Статистика", "🔍 Тест-Аудит", 
+    "📋 Job Order", "📅 Общее расписание",
+    "⏱ Интервал", "📋 Логи", "🔗 Сменить таблицу", "🔗 Сменить таблицу (Море)", "🔙 Главное меню"
+]
 
 
 
@@ -45,6 +57,11 @@ class IsSuperAdminFilter(BaseFilter):
         return user.username.lower() == "pankonick"
 
 
+# Role definition groups for cleaner filters
+ADMIN_ALL = [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE, UserRole.HOT_LINE, UserRole.PIER_MANAGER]
+ADMIN_MANAGEMENT = [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE]
+SYSTEM_ADMIN = [UserRole.SUPER_ADMIN]
+
 router = Router()
 # Apply admin guard to ALL message and callback handlers in this router
 router.message.filter(IsAdminFilter())
@@ -56,13 +73,14 @@ class AdminStates(StatesGroup):
     waiting_for_monitor_username = State()
     waiting_for_land_monitor_username = State()
     waiting_for_guide_name_sea = State()
+    waiting_for_job_order_guide = State()
 
-@router.message(F.text == "🔗 Сменить таблицу", IsSuperAdminFilter())
+@router.message(F.text == "🔗 Сменить таблицу", RoleFilter(SYSTEM_ADMIN))
 async def cmd_set_sheet_kb(message: types.Message, state: FSMContext):
     await message.answer("📝 Пришли мне URL или ID новой Google таблицы:")
     await state.set_state(AdminStates.waiting_for_spreadsheet_id)
 
-@router.message(AdminStates.waiting_for_spreadsheet_id, IsSuperAdminFilter())
+@router.message(AdminStates.waiting_for_spreadsheet_id, IsSuperAdminFilter(), ~F.text.in_(MENU_BUTTONS))
 async def process_sheet_url(message: types.Message, state: FSMContext):
     raw_input = message.text
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw_input)
@@ -90,12 +108,12 @@ async def process_sheet_url(message: types.Message, state: FSMContext):
         
     await state.clear()
 
-@router.message(F.text == "🔗 Сменить таблицу (Море)", IsSuperAdminFilter())
+@router.message(F.text == "🔗 Сменить таблицу (Море)", RoleFilter(SYSTEM_ADMIN))
 async def cmd_set_sea_sheet_kb(message: types.Message, state: FSMContext):
     await message.answer("📝 Пришли мне URL или ID новой Google таблицы (ПЛАН НА МОРЕ):")
     await state.set_state(AdminStates.waiting_for_sea_spreadsheet_id)
 
-@router.message(AdminStates.waiting_for_sea_spreadsheet_id, IsSuperAdminFilter())
+@router.message(AdminStates.waiting_for_sea_spreadsheet_id, IsSuperAdminFilter(), ~F.text.in_(MENU_BUTTONS))
 async def process_sea_sheet_url(message: types.Message, state: FSMContext):
     raw_input = message.text
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw_input)
@@ -124,7 +142,7 @@ async def process_sea_sheet_url(message: types.Message, state: FSMContext):
         
     await state.clear()
 
-@router.message(F.text == "📋 Логи", IsSuperAdminFilter())
+@router.message(F.text == "📋 Логи", RoleFilter(SYSTEM_ADMIN))
 async def cmd_logs_kb(message: types.Message):
     try:
         with open("logs/bot.log", "r", encoding="utf-8", errors="replace") as f:
@@ -148,12 +166,12 @@ async def cmd_logs_kb(message: types.Message):
         logger.exception(f"Error reading logs: {e}")
         await message.answer(f"❌ Ошибка при чтении логов: {e}")
 
-@router.message(F.text == "👁 Мониторинг гидов")
+@router.message(F.text == "👁 Мониторинг гидов", RoleFilter(ADMIN_ALL))
 async def cmd_monitor_guides(message: types.Message, state: FSMContext):
     await message.answer("👥 Введи username гида (через @), чье расписание ты хочешь посмотреть:")
     await state.set_state(AdminStates.waiting_for_monitor_username)
 
-@router.message(AdminStates.waiting_for_monitor_username)
+@router.message(AdminStates.waiting_for_monitor_username, ~F.text.in_(MENU_BUTTONS))
 async def process_guide_monitor(message: types.Message, state: FSMContext):
     target_username = message.text.replace("@", "").strip()
     
@@ -188,7 +206,7 @@ async def process_guide_monitor(message: types.Message, state: FSMContext):
     
     await state.clear()
 
-@router.message(F.text == "🌊 Мониторинг моря")
+@router.message(F.text == "🌊 Мониторинг моря", RoleFilter(ADMIN_ALL))
 async def cmd_monitor_sea_guides(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.button(text="📅 Сегодня", callback_data="admsea_date_today")
@@ -293,7 +311,7 @@ async def process_admin_sea_guide_select_legacy(callback: types.CallbackQuery, s
     await _send_admin_sea_plans(target_username, callback.message)
     await state.clear()
 
-@router.message(F.text == "🚐 Мониторинг суши")
+@router.message(F.text == "🚐 Мониторинг суши", RoleFilter(ADMIN_ALL))
 async def cmd_monitor_land(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.button(text="📅 Сегодня", callback_data="admland_date_today")
@@ -362,7 +380,7 @@ async def process_admin_land_guide_select_legacy(callback: types.CallbackQuery, 
     await callback.message.answer(f"🚐 План на суше для @{username}:", reply_markup=builder.as_markup())
     await state.clear()
 
-@router.message(AdminStates.waiting_for_guide_name_sea)
+@router.message(AdminStates.waiting_for_guide_name_sea, ~F.text.in_(MENU_BUTTONS))
 async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
     target_username = message.text.replace("@", "").strip()
     data = await state.get_data()
@@ -376,7 +394,7 @@ async def process_guide_monitor_sea(message: types.Message, state: FSMContext):
     else:
         await _send_admin_sea_plans(target_username, message)
 
-@router.message(AdminStates.waiting_for_land_monitor_username)
+@router.message(AdminStates.waiting_for_land_monitor_username, ~F.text.in_(MENU_BUTTONS))
 async def process_guide_monitor_land(message: types.Message, state: FSMContext):
     username = message.text.replace("@", "").strip()
     data = await state.get_data()
@@ -395,6 +413,152 @@ async def process_guide_monitor_land(message: types.Message, state: FSMContext):
         builder.button(text="Завтра", callback_data=f"admin_land_tomorrow_{username}")
         builder.adjust(2)
         await message.answer(f"🚐 Выберите дату для @{username}:", reply_markup=builder.as_markup())
+
+@router.message(F.text == "📋 Job Order", RoleFilter(ADMIN_MANAGEMENT))
+async def cmd_job_order_menu(message: types.Message):
+    """Ask for date first"""
+    await message.answer(
+        "📅 <b>Job Order</b>\nВыберите дату, за которую хотите посмотреть список:",
+        reply_markup=get_job_order_date_keyboard(),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("jo_date_"))
+async def process_job_order_date(callback: types.CallbackQuery):
+    date_type = callback.data.replace("jo_date_", "")
+    now = get_phuket_now().date()
+    target_date = now if date_type == "today" else now + datetime.timedelta(days=1)
+    date_str = target_date.strftime('%d.%m')
+
+    guides_with_work = set() # (username, display, type)
+    
+    try:
+        # Load all valid guides from BTC Schedule for filtering and categorization
+        guide_type_map = {} # username -> type
+        btc_sheet = await google_sheets.get_current_month_sheet()
+        if btc_sheet:
+            staff, freelance = await google_sheets.parse_guides(btc_sheet)
+            for g in staff: guide_type_map[g['username'].lower()] = 'staff'
+            for g in freelance: guide_type_map[g['username'].lower()] = 'freelance'
+
+        values = await sea_plan_service._get_worksheet_values(target_date)
+        if not values:
+            await callback.message.edit_text(f"📭 Лист на {date_str} пуст или не найден.")
+            return
+
+        # Scan ALL rows and ALL columns for @usernames
+        for row in values:
+            row_str = " ".join([str(v) for v in row if v])
+            if "@" in row_str:
+                matches = re.findall(r'([^@|,\t\n\r]+)?(@\w+)', row_str)
+                for display, uname in matches:
+                    u = uname.replace("@", "").lower().strip()
+                    
+                    # FILTER: Only include if guide exists in master schedule
+                    if u not in guide_type_map:
+                        continue
+                    
+                    g_type = guide_type_map[u]
+                    d = display.strip() if display else u
+                    d = re.sub(r'FL\s+|Guide\s+|\+\d+|[\d\s\.]+$', '', d, flags=re.IGNORECASE).strip()
+                    if not d or d == u: d = u.upper()
+                    
+                    guides_with_work.add((u, d, g_type))
+
+    except Exception as e:
+        logger.exception(f"Error discovering guides for {date_str}")
+        await callback.message.edit_text(f"❌ Ошибка поиска: {e}")
+        return
+
+    if not guides_with_work:
+        await callback.message.edit_text(f"📭 На {date_str} работа для гидов не найдена.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    
+    # Categorize and Sort
+    staff_guides = sorted([g for g in guides_with_work if g[2] == 'staff'], key=lambda x: x[1])
+    freelance_guides = sorted([g for g in guides_with_work if g[2] == 'freelance'], key=lambda x: x[1])
+    
+    # Staff Section
+    if staff_guides:
+        builder.row(types.InlineKeyboardButton(text="─── ШТАТНЫЕ ГИДЫ ───", callback_data="none"))
+        for uname, display, _ in staff_guides:
+            builder.row(types.InlineKeyboardButton(
+                text=f"👤 {display} (@{uname})", 
+                callback_data=f"gen_jo_{date_type}_{uname}"
+            ))
+
+    # Freelance Section
+    if freelance_guides:
+        builder.row(types.InlineKeyboardButton(text="─── ФРИЛАНСЕРЫ ───", callback_data="none"))
+        for uname, display, _ in freelance_guides:
+            builder.row(types.InlineKeyboardButton(
+                text=f"👤 {display} (@{uname})", 
+                callback_data=f"gen_jo_{date_type}_{uname}"
+            ))
+
+    await callback.message.edit_text(
+        f"📅 <b>Job Orders на {date_str}</b>\n"
+        "Выберите гида из списка:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data == "none")
+async def process_none_callback(callback: types.CallbackQuery):
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("gen_jo_"))
+async def process_job_order_selection(callback: types.CallbackQuery):
+    # Format: gen_jo_today_username or gen_jo_tomorrow_username
+    # Usernames can have underscores, so we must limit splitting
+    parts = callback.data.split("_", 3)
+    if len(parts) < 4: return
+    
+    date_type = parts[2]
+    uname = parts[3]
+    
+    now = get_phuket_now().date()
+    target_date = now if date_type == "today" else now + datetime.timedelta(days=1)
+    date_str = target_date.strftime('%d.%m')
+    
+    await callback.message.edit_text(f"⏳ Генерирую Job Order для @{uname} на {date_str}...")
+    
+    try:
+        # 1. Try Sea Plan first
+        sea_plans = await sea_plan_service.get_guide_sea_plan(uname, target_date)
+        if sea_plans:
+            plan = sea_plans[0]
+            prog_names = [prog.name for prog in plan.programs]
+            guests = await sea_plan_service.get_guest_list(target_date, prog_names)
+            
+            photo_bytes = job_order_generator.generate_sea_job_order(plan, guests)
+            await callback.message.delete()
+            await callback.message.answer_photo(
+                types.BufferedInputFile(photo_bytes.getvalue(), filename=f"JobOrder_{uname}_{date_str}.png"),
+                caption=f"📋 <b>SEA Job Order: @{uname}</b>\n📅 {date_str}\n🚢 {plan.boat}",
+                parse_mode="HTML"
+            )
+            return
+
+        # 2. Try Land Plan
+        land_plans = await sea_plan_service.get_guide_land_plan(uname, target_date)
+        if land_plans:
+            plan = land_plans[0]
+            photo_bytes = job_order_generator.generate_land_job_order(plan)
+            await callback.message.delete()
+            await callback.message.answer_photo(
+                types.BufferedInputFile(photo_bytes.getvalue(), filename=f"JobOrder_{uname}_{date_str}.png"),
+                caption=f"📋 <b>LAND Job Order: @{uname}</b>\n📅 {date_str}\n🚐 {plan.program}",
+                parse_mode="HTML"
+            )
+            return
+
+        await callback.message.edit_text(f"❌ Не удалось найти конкретные детали программы для @{uname} на {date_str}.")
+    except Exception as e:
+        logger.exception(f"Error generating job order for {uname}")
+        await callback.message.edit_text(f"❌ Ошибка генерации: {str(e)}")
 
 async def _send_admin_land_plans(username: str, target_date: datetime.date, plans: list, message: types.Message):
     """Helper to format and send land plans in Admin view"""
@@ -434,7 +598,7 @@ async def _send_admin_land_plans(username: str, target_date: datetime.date, plan
         
         await send_long_message(message, response, parse_mode="HTML")
 
-@router.message(F.text == "📊 Статистика")
+@router.message(F.text == "📊 Статистика", RoleFilter(ADMIN_ALL))
 async def cmd_stats_kb(message: types.Message):
     async with AsyncSessionLocal() as session:
         # Get all users
@@ -480,7 +644,7 @@ async def cmd_stats_kb(message: types.Message):
         
     await message.answer(response, parse_mode="HTML")
 
-@router.message(F.text == "⏱ Интервал", IsSuperAdminFilter())
+@router.message(F.text == "⏱ Интервал", RoleFilter(SYSTEM_ADMIN))
 async def cmd_set_interval_kb(message: types.Message):
     from utils.keyboards import get_interval_keyboard
     await message.answer(
@@ -581,3 +745,185 @@ async def process_guest_list_admin(callback: types.CallbackQuery):
             response += "\n"
     
     await callback.message.answer(response, parse_mode="HTML")
+
+@router.message(F.text == "🔍 Тест-Аудит", RoleFilter(ADMIN_MANAGEMENT))
+async def cmd_run_audit(message: types.Message):
+    await message.answer("🧪 <b>Запускаю полное тестирование...</b>\n\nЯ прогню симуляцию ответов для всех гидов на сегодня и завтра. Это может занять около минуты из-за лимитов Google API.\n\n⏳ Пожалуйста, подожди...", parse_mode="HTML")
+    
+    try:
+        from scripts.bot_audit import run_audit
+        report_link = await run_audit()
+        
+        if report_link:
+            await message.answer(
+                f"✅ <b>Тестирование завершено!</b>\n\n"
+                f"📊 Отчет сформирован и доступен по ссылке:\n{report_link}",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer("❌ Произошла ошибка при создании отчета. Проверь логи или права доступа к таблице.")
+            
+    except Exception as e:
+        logger.exception(f"Error running audit from bot: {e}")
+        await message.answer(f"❌ Критическая ошибка при выполнении аудита: {e}")
+@router.message(F.text == "📅 Общее расписание", RoleFilter(ADMIN_MANAGEMENT))
+async def cmd_general_schedule_menu(message: types.Message):
+    """General Schedule: Today or Tomorrow"""
+    await message.answer(
+        "📅 <b>Общее расписание всех гидов</b>\nВыберите дату:",
+        reply_markup=get_general_schedule_date_keyboard(),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("gs_date_"))
+async def process_general_schedule_date(callback: types.CallbackQuery):
+    date_type = callback.data.replace("gs_date_", "")
+    now = get_phuket_now().date()
+    target_date = now if date_type == "today" else now + datetime.timedelta(days=1)
+    date_str = target_date.strftime('%d.%m')
+
+    await callback.message.edit_text(f"📊 Генерирую общее расписание на {date_str}...")
+    
+    try:
+        # 1. Fetch Master Schedule info
+        master_schedule_map = {}
+        sheet = await google_sheets.get_current_month_sheet()
+        if sheet:
+            staff, freelance = await google_sheets.parse_guides(sheet)
+            all_guides = staff + freelance
+            # Fetch all values once for efficiency
+            all_values = await asyncio.to_thread(sheet.get_all_values)
+            if all_values:
+                header = all_values[0]
+                day_num = str(target_date.day)
+                col_idx = -1
+                for i, val in enumerate(header):
+                    if val.strip() == day_num:
+                        col_idx = i
+                        break
+                
+                if col_idx != -1:
+                    for g in all_guides:
+                        row_idx = g['row']
+                        if row_idx <= len(all_values):
+                            row = all_values[row_idx - 1]
+                            if col_idx < len(row):
+                                val = row[col_idx].strip()
+                                # Simple lookback if empty (for merged cells)
+                                if not val:
+                                    for prev in range(col_idx-1, 1, -1):
+                                        if row[prev].strip():
+                                            val = row[prev].strip()
+                                            break
+                                if val:
+                                    master_schedule_map[g['username'].lower()] = val
+
+        # 2. Fetch ALL plans
+        # Sea Plans
+        sea_plans = []
+        sea_guides = await sea_plan_service.get_active_sea_guides([target_date])
+        for uname in sea_guides:
+            p = await sea_plan_service.get_guide_sea_plan(uname, target_date)
+            if p: sea_plans.extend(p)
+            
+        unique_sea = []
+        seen_boats = set()
+        for p in sea_plans:
+            if p.boat not in seen_boats:
+                unique_sea.append(p)
+                seen_boats.add(p.boat)
+
+        # Land Plans
+        land_plans = []
+        land_guides = await sea_plan_service.get_active_land_guides([target_date])
+        for uname in land_guides:
+            p = await sea_plan_service.get_guide_land_plan(uname, target_date)
+            if p: land_plans.extend(p)
+
+        # 3. Generate Image
+        from services.image_generator import job_order_generator
+        photo_bytes = job_order_generator.generate_general_schedule(date_str, unique_sea, land_plans, master_schedule_map)
+        
+        # 3. Send to Admin
+        await callback.message.delete()
+        builder = InlineKeyboardBuilder()
+        builder.button(text="📢 Разослать гидам", callback_data=f"gs_broadcast_{date_type}")
+        
+        await callback.message.answer_photo(
+            types.BufferedInputFile(photo_bytes.getvalue(), filename=f"Schedule_{date_str}.png"),
+            caption=f"📅 <b>Общее расписание: {date_str}</b>\n\nВсе изменения в таблице учтены.",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup()
+        )
+
+    except Exception as e:
+        logger.exception(f"Error generating general schedule for {date_str}")
+        await callback.message.edit_text(f"❌ Ошибка генерации: {str(e)}")
+
+@router.callback_query(F.data.startswith("gs_broadcast_"))
+async def process_broadcast_schedule(callback: types.CallbackQuery, bot: Bot):
+    date_type = callback.data.replace("gs_broadcast_", "")
+    now = get_phuket_now().date()
+    target_date = now if date_type == "today" else now + datetime.timedelta(days=1)
+    date_str = target_date.strftime('%d.%m')
+    
+    await callback.answer("Начинаю рассылку...")
+    msg = await callback.message.answer(f"⏳ Рассылаю расписание на {date_str}...")
+    
+    # Identify all guides with work
+    guides_to_notify = set()
+    try:
+        sea_guides = await sea_plan_service.get_active_sea_guides([target_date])
+        land_guides = await sea_plan_service.get_active_land_guides([target_date])
+        guides_to_notify.update(sea_guides)
+        guides_to_notify.update(land_guides)
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка получения списка гидов: {e}")
+        return
+
+    if not guides_to_notify:
+        await msg.edit_text(f"📭 На {date_str} нет гидов с работой для рассылки.")
+        return
+
+    # Broadcast metrics
+    success = 0
+    failed = 0
+    not_in_bot = []
+    
+    # Get the photo from the current message
+    photo_file_id = callback.message.photo[-1].file_id
+
+    async with AsyncSessionLocal() as session:
+        for uname in guides_to_notify:
+            # Find in DB
+            query = select(User).where(User.username.ilike(uname))
+            result = await session.execute(query)
+            user = result.scalar_one_or_none()
+            
+            if not user or not user.telegram_id:
+                not_in_bot.append(f"@{uname}")
+                continue
+                
+            try:
+                await bot.send_photo(
+                    chat_id=user.telegram_id,
+                    photo=photo_file_id,
+                    caption=f"📅 <b>Утвержденное расписание на {date_str}</b>\n\nПожалуйста, ознакомьтесь с вашим заданием.",
+                    parse_mode="HTML"
+                )
+                success += 1
+            except Exception as e:
+                logger.error(f"Failed to send schedule to @{uname} ({user.telegram_id}): {e}")
+                failed += 1
+
+    report = (
+        f"📢 <b>Рассылка на {date_str} завершена!</b>\n\n"
+        f"✅ Успешно доставлено: <b>{success}</b>\n"
+        f"❌ Ошибки доставки: <b>{failed}</b>\n"
+        f"📭 Не начали диалог: <b>{len(not_in_bot)}</b>\n"
+    )
+    
+    if not_in_bot:
+        report += f"\n<b>Список гидов, не получивших расписание:</b>\n{', '.join(not_in_bot)}"
+
+    await msg.edit_text(report, parse_mode="HTML")

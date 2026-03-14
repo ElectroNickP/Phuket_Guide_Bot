@@ -4,6 +4,14 @@ import datetime
 
 Base = declarative_base()
 
+class UserRole:
+    SUPER_ADMIN = 'super_admin'   # @pankonick
+    ADMIN = 'admin'               # General admin
+    HEAD_OF_GUIDE = 'head_guide'  # Can manage schedules/JO
+    HOT_LINE = 'hotline'          # Coordination/Emergency
+    PIER_MANAGER = 'pier_manager' # Pier coordination
+    GUIDE = 'guide'               # Regular guide
+
 class User(Base):
     __tablename__ = 'users'
     
@@ -11,7 +19,7 @@ class User(Base):
     telegram_id = Column(Integer, unique=True, nullable=False)
     username = Column(String, unique=True)
     full_name = Column(String)
-    role = Column(String, default='guide') # 'admin', 'guide'
+    role = Column(String, default=UserRole.GUIDE)
     guide_type = Column(String) # 'staff', 'freelance'
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     last_contact = Column(DateTime, default=datetime.datetime.utcnow)

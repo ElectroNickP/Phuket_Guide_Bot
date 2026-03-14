@@ -8,3 +8,4 @@ aiosqlite
 apscheduler
 loguru
 redis>=5.0.0
+pillow

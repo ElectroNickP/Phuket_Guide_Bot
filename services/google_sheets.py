@@ -135,12 +135,52 @@ class GoogleSheetsService:
         if day is None:
             day = get_phuket_now().day
             
-        col_idx = 2 + day
         # Run blocking call in thread pool
-        row_values = await asyncio.to_thread(sheet.row_values, guide_row)
-        if len(row_values) < col_idx:
+        all_values = await asyncio.to_thread(sheet.get_all_values)
+        if not all_values or guide_row > len(all_values):
             return None
             
-        return row_values[col_idx - 1]
+        header = all_values[0]
+        row_values = all_values[guide_row - 1]
+        
+        # 1. Dynamically find the column for the day
+        # We look for a cell in the first row that matches the day number (string)
+        target_col_idx = -1
+        day_str = str(day)
+        for i, val in enumerate(header):
+            if val.strip() == day_str:
+                target_col_idx = i
+                break
+        
+        # Fallback to hardcoded logic if header parsing fails
+        if target_col_idx == -1:
+            target_col_idx = 1 + day # Column C is Index 2, which is Day 1. So Day N is N+1? No, 2+N-1 = N+1.
+            # My previous was 2+day which is N+2. Let's be careful.
+            # C is Col 3 (Index 2). Day 1. 2 + 1 = 3 (Index 2). Correct.
+            target_col_idx = 2 + day - 1 # Index 2 for Day 1.
+        
+        if len(row_values) <= target_col_idx:
+            return None
+            
+        value = row_values[target_col_idx].strip()
+        
+        # --- Multi-day / Merged Cells Support ---
+        if not value:
+            day_off_markers = ["ВЫХ", "OFF", "VACATION", "RESERVE", "РЕЗЕРВ"]
+            
+            # Look back up to 5 days (some programs are long)
+            # Stay within the schedule bounds (start looking from target_col_idx - 1)
+            # Column C (Index 2) is the start of the schedule
+            for back_idx in range(target_col_idx - 1, 1, -1):
+                if back_idx >= len(row_values):
+                    continue
+                
+                prev_val = row_values[back_idx].strip()
+                if prev_val:
+                    # We return the value even if it's a day off, because if it's merged, 
+                    # it means the day off continues.
+                    return prev_val
+                    
+        return value
 
 google_sheets = GoogleSheetsService()
