@@ -32,27 +32,42 @@ MENU_BUTTONS = [
 
 class IsAdminFilter(BaseFilter):
     """Router-level filter: silently ignores non-admin users."""
-    async def __call__(self, event: types.Message | types.CallbackQuery) -> bool:
+    async def __call__(self, event: types.Message | types.CallbackQuery, **data) -> bool:
         user = event.from_user if hasattr(event, 'from_user') else None
         if not user:
             return False
             
+        # Impersonation Check (Tester Mode)
+        imp_user = data.get("impersonated_user")
+        if imp_user:
+            # If impersonating, check if the target role is an admin role
+            return imp_user.get("role") in [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE, UserRole.HOT_LINE, UserRole.PIER_MANAGER]
+
         # Check by ID
         if user.id in config.admin_id_list:
             return True
             
         # Check by Username
         if user.username:
-            return user.username.lower() in config.admin_username_list
+            uname = user.username.lower()
+            return uname in config.admin_username_list or uname in config.tester_username_list
             
         return False
 
 
 class IsSuperAdminFilter(BaseFilter):
     """Router-level filter: only allows super admins (@Pankonick)."""
-    async def __call__(self, event: types.Message | types.CallbackQuery) -> bool:
+    async def __call__(self, event: types.Message | types.CallbackQuery, **data) -> bool:
         user = event.from_user if hasattr(event, 'from_user') else None
-        if not user or not user.username:
+        if not user:
+            return False
+            
+        # Impersonation Check (Tester Mode)
+        imp_user = data.get("impersonated_user")
+        if imp_user:
+            return imp_user.get("role") == UserRole.SUPER_ADMIN
+
+        if not user.username:
             return False
         return user.username.lower() == "pankonick"
 
@@ -66,6 +81,14 @@ router = Router()
 # Apply admin guard to ALL message and callback handlers in this router
 router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
+
+class IsTesterFilter(BaseFilter):
+    """Only allowing authorized testers."""
+    async def __call__(self, event: types.Message | types.CallbackQuery) -> bool:
+        user = event.from_user
+        if not user or not user.username:
+            return False
+        return user.username.lower() in config.tester_username_list
 
 class AdminStates(StatesGroup):
     waiting_for_spreadsheet_id = State()
@@ -165,6 +188,29 @@ async def cmd_logs_kb(message: types.Message):
     except Exception as e:
         logger.exception(f"Error reading logs: {e}")
         await message.answer(f"❌ Ошибка при чтении логов: {e}")
+
+class AdminReportStates(StatesGroup):
+    waiting_for_username = State()
+
+@router.message(F.text == "📝 Отчет за гида", RoleFilter(ADMIN_MANAGEMENT))
+async def cmd_admin_report_proxy(message: types.Message, state: FSMContext):
+    await message.answer("👥 Введите <b>@username</b> гида, за которого нужно сдать отчет:", parse_mode="HTML")
+    await state.set_state(AdminReportStates.waiting_for_username)
+
+@router.message(AdminReportStates.waiting_for_username)
+async def process_admin_report_username(message: types.Message, state: FSMContext):
+    username = message.text.strip().replace("@", "")
+    await state.update_data(proxy_username=username)
+    
+    # We trigger the same start_report flow but with proxy_username in data
+    from handlers.guide import ReportStates, get_report_date_keyboard
+    await message.answer(
+        f"👤 Вы сдаете отчет за <b>@{username}</b>.\n\n"
+        "Для какого дня создать отчет?",
+        parse_mode="HTML",
+        reply_markup=get_report_date_keyboard()
+    )
+    await state.set_state(ReportStates.waiting_for_report_date)
 
 @router.message(F.text == "👁 Мониторинг гидов", RoleFilter(ADMIN_ALL))
 async def cmd_monitor_guides(message: types.Message, state: FSMContext):
@@ -279,7 +325,7 @@ async def _send_admin_sea_plans_single(target_username: str, date: datetime.date
                     if len(plan.guides) > 1 and prog.short_guide:
                         prog_text += f" - {prog.short_guide}"
                     day_response += f"  • {prog_text}\n"
-                day_response += f"📊 <b>Total Pax:</b> {plan.total_pax}\n"
+                day_response += f"📊 <b>GRAND TOTAL:</b> {plan.total_pax}\n"
             
             builder = InlineKeyboardBuilder()
             builder.button(text="📋 Список гостей", callback_data=f"guestlist_admin_{date_str}_{target_username}")
@@ -568,14 +614,20 @@ async def _send_admin_land_plans(username: str, target_date: datetime.date, plan
 
     for plan in plans:
         response = f"🚐 <b>ADMIN VIEW: @{username}</b>\n"
-        response += f"🔹 <b>Program: {plan.program}</b>\n"
-        response += f"📅 <b>Date:</b> {plan.date}\n\n"
+        response += f"🏝️ <b>Program:</b> {plan.program}\n"
+        response += f"📅 <b>Date:</b> {plan.date}\n"
+        response += f"🪑 <b>Total PAX:</b> {plan.pax_string}\n"
         
         if plan.guides:
-            response += "👤 <b>Guide(s):</b>\n"
+            guide_infos = []
             for g in plan.guides:
-                response += f"  • {g.full_info} (P/U: {g.pickup_time} @ {g.pickup_location})\n"
-            response += "\n"
+                # Try to extract @username from full_info if possible
+                # full_info looks like "FALLA BOGOMOLETS   @BE_Ella00"
+                parts = g.full_info.split('@')
+                uname_tag = f"@{parts[1].strip()}" if len(parts) > 1 else g.full_info
+                guide_infos.append(f"{uname_tag} (P/U: {g.pickup_time} @ {g.pickup_location})")
+            
+            response += f"🧭 <b>Guide(s):</b> {', '.join(guide_infos)}\n"
             
         if plan.bus:
             response += f"🚌 <b>Bus:</b> <code>{plan.bus}</code>\n"
@@ -583,17 +635,17 @@ async def _send_admin_land_plans(username: str, target_date: datetime.date, plan
             response += f"👨‍✈️ <b>Driver:</b> {plan.driver}\n"
         
         if plan.guests:
-            response += "\n👥 <b>Guest List:</b>\n\n"
+            response += "\n👫 <b>Guest List:</b>\n\n"
             for g in plan.guests:
                 response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
                 response += f"    <b>Pickup:</b> {g.pickup}\n"
-                response += f"    <b>Hotel:</b> {g.hotel} ({g.area}) (RM: {g.room})\n"
+                response += f"    <b>Hotel:</b> <code>{g.hotel} ({g.area})</code> (RM: {g.room})\n"
                 response += f"    <b>Name:</b> <code>{g.name}</code>\n"
                 if g.phone and g.phone != "-":
                     response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
                 if g.remarks and g.remarks != "-":
                     response += f"    <b>Remarks:</b> {g.remarks}\n"
-                response += f"    💰 <b>COT:</b> <code>{g.cot}</code>\n"
+                response += f"    💵 <b>COT:</b> <code>{g.cot}</code>\n"
                 response += "\n"
         
         await send_long_message(message, response, parse_mode="HTML")
@@ -735,13 +787,13 @@ async def process_guest_list_admin(callback: types.CallbackQuery):
             response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
             if g.pickup:
                 response += f"    <b>Pickup:</b> {g.pickup}\n"
-            response += f"    <b>Hotel:</b> {g.hotel} (RM: {g.room})\n"
+            response += f"    <b>Hotel:</b> <code>{g.hotel}</code> (RM: {g.room})\n"
             response += f"    <b>Name:</b> <code>{g.name}</code>\n"
             if g.phone and g.phone != "-":
                 response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
             if g.remarks and g.remarks != "-":
                 response += f"    <b>Remarks:</b> {g.remarks}\n"
-            response += f"    💰 <b>COT:</b> <code>{g.cot}</code>\n"
+            response += f"    💵 <b>COT:</b> <code>{g.cot}</code>\n"
             response += "\n"
     
     await callback.message.answer(response, parse_mode="HTML")
@@ -927,3 +979,93 @@ async def process_broadcast_schedule(callback: types.CallbackQuery, bot: Bot):
         report += f"\n<b>Список гидов, не получивших расписание:</b>\n{', '.join(not_in_bot)}"
 
     await msg.edit_text(report, parse_mode="HTML")
+
+# ─── Impersonation (Tester Mode) ───────────────────────────────────────────
+
+@router.message(Command("become_user"), IsTesterFilter())
+async def cmd_become_user(message: types.Message):
+    """Tester: Choose a user to impersonate"""
+    sheet = await google_sheets.get_current_month_sheet()
+    if not sheet:
+        await message.answer("❌ Не удалось загрузить расписание.")
+        return
+
+    staff, freelance = await google_sheets.parse_guides(sheet)
+    all_guides = staff + freelance
+    
+    # Sort and remove duplicates from sheet
+    unique_guide_names = sorted(list(set([g['username'].lower() for g in all_guides if g['username']])))
+    
+    builder = InlineKeyboardBuilder()
+    
+    # Add common roles for testing
+    builder.row(types.InlineKeyboardButton(text="--- SYSTEM ROLES ---", callback_data="none"))
+    builder.row(
+        types.InlineKeyboardButton(text="👤 Admin", callback_data="imp_role_admin"),
+        types.InlineKeyboardButton(text="👤 Super Admin", callback_data="imp_role_super_admin")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="👤 Head of Guide", callback_data="imp_role_head_guide"),
+        types.InlineKeyboardButton(text="👤 Hot Line", callback_data="imp_role_hotline")
+    )
+    
+    builder.row(types.InlineKeyboardButton(text="--- GUIDES FROM SHEET ---", callback_data="none"))
+    for uname in unique_guide_names:
+        builder.button(text=f"👤 @{uname}", callback_data=f"imp_user_{uname}")
+        
+    builder.adjust(1, 2, 2, 1, 3)
+    
+    await message.answer(
+        "🎭 <b>Режим имитации (Tester Mode)</b>\n\n"
+        "Выберите пользователя или роль, которую хотите примерить.\n"
+        "После выбора бот будет считать вас этим пользователем для ВСЕХ функций.",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+
+@router.message(Command("exit_impersonation"))
+async def cmd_exit_impersonation(message: types.Message, state: FSMContext):
+    """Restore original identity"""
+    redis = state.storage.redis if hasattr(state, "storage") and hasattr(state.storage, "redis") else None
+    if redis:
+        await redis.delete(f"impersonation:{message.from_user.id}")
+        await message.answer("✅ <b>Режим имитации выключен.</b>\nВаша личность восстановлена. /start для обновления меню.", parse_mode="HTML")
+    else:
+        await message.answer("❌ Ошибка: Redis не доступен.")
+
+@router.callback_query(F.data.startswith("imp_user_"), IsTesterFilter())
+async def process_impersonate_user(callback: types.CallbackQuery, state: FSMContext):
+    target_username = callback.data.replace("imp_user_", "")
+    
+    # Logic: Default to GUIDE role for impersonated guides unless specified
+    imp_data = {
+        "username": target_username,
+        "role": UserRole.GUIDE,
+        "id": 0 # Fake ID
+    }
+    
+    redis = state.storage.redis if hasattr(state, "storage") and hasattr(state.storage, "redis") else None
+    if redis:
+        import json
+        await redis.set(f"impersonation:{callback.from_user.id}", json.dumps(imp_data), ex=3600) # 1 hour expiry
+        await callback.message.edit_text(f"✅ Теперь вы имитируете @{target_username}.\nИспользуйте /start для обновления интерфейса.")
+    else:
+        await callback.answer("Ошибка: Redis недоступен", show_alert=True)
+
+@router.callback_query(F.data.startswith("imp_role_"), IsTesterFilter())
+async def process_impersonate_role(callback: types.CallbackQuery, state: FSMContext):
+    role = callback.data.replace("imp_role_", "")
+    
+    imp_data = {
+        "username": f"TEST_{role.upper()}",
+        "role": role,
+        "id": 0
+    }
+    
+    redis = state.storage.redis if hasattr(state, "storage") and hasattr(state.storage, "redis") else None
+    if redis:
+        import json
+        await redis.set(f"impersonation:{callback.from_user.id}", json.dumps(imp_data), ex=3600)
+        await callback.message.edit_text(f"✅ Теперь вы имитируете РОЛЬ: {role}.\nИспользуйте /start для обновления интерфейса.")
+    else:
+        await callback.answer("Ошибка: Redis недоступен", show_alert=True)

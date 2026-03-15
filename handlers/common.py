@@ -14,7 +14,7 @@ import datetime
 router = Router()
 
 @router.message(CommandStart())
-async def cmd_start(message: types.Message, bot: Bot):
+async def cmd_start(message: types.Message, bot: Bot, **data):
     """Start command handler with detailed logging"""
     logger.info(f"Start command handler entered for {message.from_user.id}")
     try:
@@ -92,6 +92,26 @@ async def cmd_start(message: types.Message, bot: Bot):
                         await session.commit()
                         logger.info(f"Updated role for {user.username} to {target_role}")
 
+        # Impersonation Override (Tester Mode)
+        imp_user = data.get("impersonated_user")
+        if imp_user:
+            is_super_adm = imp_user.get("role") == UserRole.SUPER_ADMIN
+            is_any_admin = is_super_adm or imp_user.get("role") in [UserRole.ADMIN, UserRole.HEAD_OF_GUIDE, UserRole.HOT_LINE, UserRole.PIER_MANAGER]
+            
+            if is_any_admin:
+                kb = get_admin_menu_keyboard(is_super_admin=is_super_adm)
+            else:
+                kb = get_main_menu_keyboard()
+                
+            await message.answer(
+                f"🎭 <b>РЕЖИМ ИМИТАЦИИ</b>\n"
+                f"Вы вошли как: @{imp_user['username']} ({imp_user['role']})\n\n"
+                f"Меню обновлено согласно правам пользователя.",
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+            return
+
         if is_admin:
             logger.debug("Calling get_admin_menu_keyboard")
             kb = get_admin_menu_keyboard(is_super_admin=is_pankonick)
@@ -115,8 +135,8 @@ async def cmd_start(message: types.Message, bot: Bot):
         await message.answer("❌ Произошла ошибка при запуске бота. Пожалуйста, попробуйте позже.")
 
 @router.message(F.text == "🔙 Главное меню")
-async def back_to_main(message: types.Message, bot: Bot):
-    await cmd_start(message, bot)
+async def back_to_main(message: types.Message, bot: Bot, **data):
+    await cmd_start(message, bot, **data)
 
 @router.message(Command("help"))
 async def cmd_help(message: types.Message):

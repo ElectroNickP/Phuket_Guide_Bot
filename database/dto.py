@@ -29,6 +29,7 @@ class GuideDTO:
     short_name: Optional[str] = None
     pickup_time: Optional[str] = None
     pickup_location: Optional[str] = None
+    pax: str = "0/0/0"
     is_me: bool = False
 
 @dataclass
@@ -39,6 +40,7 @@ class LandPlanDTO:
     guests: List[GuestDTO] = field(default_factory=list)
     bus: Optional[str] = None
     driver: Optional[str] = None
+    pax_string: str = "0/0/0"
     is_assigned: bool = False
 
 @dataclass
@@ -50,4 +52,5 @@ class SeaPlanDTO:
     programs: List[ProgramDTO] = field(default_factory=list)
     guides: List[GuideDTO] = field(default_factory=list)
     total_pax: int = 0
+    pax_string: str = "0/0/0"
     is_assigned: bool = False

@@ -10,7 +10,7 @@ class RoleFilter(BaseFilter):
     def __init__(self, allowed_roles: List[str]):
         self.allowed_roles = allowed_roles
 
-    async def __call__(self, event: Union[Message, CallbackQuery]) -> bool:
+    async def __call__(self, event: Union[Message, CallbackQuery], **data) -> bool:
         user_id = event.from_user.id
         
         # Super admin bypass (Hardcoded to pankonick or based on config.ADMIN_ID)
@@ -21,6 +21,14 @@ class RoleFilter(BaseFilter):
             
         if is_pankonick or user_id == config.ADMIN_ID:
             return True
+
+        # Impersonation Check (Tester Mode)
+        imp_user = data.get("impersonated_user")
+        if imp_user:
+            # If impersonating, we check allowed roles against the target role
+            if imp_user.get("role") == UserRole.SUPER_ADMIN:
+                return True
+            return imp_user.get("role") in self.allowed_roles
 
         async with AsyncSessionLocal() as session:
             query = select(User).where(User.telegram_id == user_id)

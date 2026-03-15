@@ -180,9 +180,23 @@ class SeaPlanService:
             
             if prog_name:
                 pax_val = 0
+                a, c, i = 0, 0, 0
                 try:
-                    pax_val = int(pax_str)
-                except:
+                    if '/' in pax_str:
+                        parts = pax_str.replace(" ", "").split('/')
+                        a = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+                        c = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                        i = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+                        pax_val = a + c + i
+                    elif '+' in pax_str:
+                        parts = pax_str.replace(" ", "").split('+')
+                        a = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+                        c = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                        pax_val = a + c
+                    else:
+                        pax_val = int(pax_str)
+                        a = pax_val
+                except ValueError:
                     pass
                 
                 short_guide = guide_str
@@ -197,7 +211,16 @@ class SeaPlanService:
                     short_guide=short_guide
                 ))
                 dto.total_pax += pax_val
-
+                
+                # Update pax_string
+                curr_a, curr_c, curr_i = 0, 0, 0
+                if dto.pax_string and dto.pax_string != "0/0/0":
+                    curr_parts = dto.pax_string.split('/')
+                    curr_a = int(curr_parts[0]) if len(curr_parts) > 0 else 0
+                    curr_c = int(curr_parts[1]) if len(curr_parts) > 1 else 0
+                    curr_i = int(curr_parts[2]) if len(curr_parts) > 2 else 0
+                
+                dto.pax_string = f"{curr_a + a}/{curr_c + c}/{curr_i + i}"
             if guide_str:
                 matches = re.findall(r'@(\w+)', guide_str)
                 is_me = False
@@ -249,19 +272,22 @@ class SeaPlanService:
             
             all_values = await self._get_worksheet_values(t_date)
             
-            # Find land section start
-            land_start = -1
-            for i, row in enumerate(all_values):
-                row_str = " ".join([str(v) for v in row if v])
-                if 'JOB ORDER - LAND JOINED TOURS' in row_str:
-                    land_start = i
-                    break
-            
-            if land_start == -1:
-                continue
+            # Land sections include: LAND JOINED TOURS and PRIVATE LAND TOURS
+            # Exclusion sections: PRIVATE AVIA TOURS
+            is_land_section = False
+            for row in all_values:
+                row_str = " ".join([str(v) for v in row if v]).upper()
+                
+                if 'JOB ORDER' in row_str:
+                    if 'PRIVATE LAND' in row_str or 'LAND JOINED' in row_str:
+                        is_land_section = True
+                    else:
+                        is_land_section = False
+                    continue
+                
+                if not is_land_section:
+                    continue
 
-            for i in range(land_start + 1, len(all_values)):
-                row = all_values[i]
                 if len(row) < 2:
                     continue
                 col1 = row[1].strip()
@@ -282,23 +308,25 @@ class SeaPlanService:
             
         all_values = await self._get_worksheet_values(target_date)
         
-        land_start = -1
-        for i, row in enumerate(all_values):
-            row_str = " ".join([str(v) for v in row if v])
-            if 'JOB ORDER - LAND JOINED TOURS' in row_str:
-                land_start = i
-                break
-        
-        if land_start == -1:
-            return []
-
         blocks = []
         current_block = None
         username_lower = username.lower()
         
+        # 1. Collect all guide identifiers across all land sections
         all_guide_identifiers = set()
-        for i in range(land_start + 1, len(all_values)):
-            row = all_values[i]
+        is_land_section = False
+        for row in all_values:
+            row_str = " ".join([str(v) for v in row if v]).upper()
+            if 'JOB ORDER' in row_str:
+                if 'PRIVATE LAND' in row_str or 'LAND JOINED' in row_str:
+                    is_land_section = True
+                else:
+                    is_land_section = False
+                continue
+            
+            if not is_land_section:
+                continue
+
             if len(row) < 8: continue
             col1 = row[1].strip()
             col7 = row[7].strip()
@@ -307,16 +335,23 @@ class SeaPlanService:
                 uname_match = re.search(r'@(\w+)', col1)
                 if uname_match: all_guide_identifiers.add(uname_match.group(1).lower())
 
-        for i in range(land_start + 1, len(all_values)):
-            row = all_values[i]
-            
-            if row and row[0] and target_date.strftime("%d.%m") not in row[0]:
-                if i > land_start + 50:
-                    break
-
+        # 2. Parse land sections into blocks
+        is_land_section = False
+        for row in all_values:
             row_str = " ".join([str(v) for v in row if v]).upper()
-            if i > land_start + 5 and ('TOTAL' in row_str or 'JOB ORDER - PRIVATE' in row_str):
-                break
+            
+            if 'JOB ORDER' in row_str:
+                if current_block:
+                    blocks.append(current_block)
+                    current_block = None
+                if 'PRIVATE LAND' in row_str or 'LAND JOINED' in row_str:
+                    is_land_section = True
+                else:
+                    is_land_section = False
+                continue
+            
+            if not is_land_section:
+                continue
 
             if len(row) < 16: continue
             
@@ -326,17 +361,29 @@ class SeaPlanService:
             col4 = row[4].strip()
             col7 = row[7].strip()
             
+            # Check for header based on date in Col A or specific formatting
             is_header = False
-            if col4 and (re.search(r' b\d+', col4, re.IGNORECASE) or re.search(r'Bus \d+', col4, re.IGNORECASE)):
+            if row[4].strip() and not row[1].strip() and not row[7].strip() and not ('@' in row[1]):
                 is_header = True
-            elif col3 and (re.search(r' b\d+', col3, re.IGNORECASE) or re.search(r'Bus \d+', col3, re.IGNORECASE)) and not col7:
-                is_header = True
-                
-            if is_header and not ('@' in col1):
+            elif row[3].strip() and not row[1].strip() and not row[7].strip() and (' b' in row[3].lower() or 'bus' in row[3].lower()):
+                 is_header = True
+
+            if is_header:
                 if current_block:
                     blocks.append(current_block)
                 current_block = LandPlanDTO(
-                    program=col4,
+                    program=row[4].strip() or row[3].strip(),
+                    date=target_date.strftime("%d.%m"),
+                    guides=[],
+                    guests=[],
+                    is_assigned=False
+                )
+                continue
+            
+            # If no current block and we see a guide, start one (handles missing headers)
+            if not current_block and '@' in col1:
+                current_block = LandPlanDTO(
+                    program="Unknown/Joined",
                     date=target_date.strftime("%d.%m"),
                     guides=[],
                     guests=[],
@@ -357,18 +404,30 @@ class SeaPlanService:
                 pu_time = col3
                 if ' ' in pu_time: pu_time = pu_time.split(' ')[0]
                 
+                pax_a_g, pax_c_g, pax_i_g = 0, 0, 0
+                try:
+                    pax_a_g = int(row[9]) if row[9].isdigit() else 0
+                    pax_c_g = int(row[10]) if row[10].isdigit() else 0
+                    pax_i_g = int(row[11]) if row[11].isdigit() else 0
+                except: pass
+
                 current_block.guides.append(GuideDTO(
                     full_info=col1,
                     short_name=col7,
                     pickup_time=pu_time,
                     pickup_location=col4,
+                    pax=f"{pax_a_g}/{pax_c_g}/{pax_i_g}",
                     is_me=is_me
                 ))
                 continue
 
             if 'Bus' in col3 or (col2 and 'Bus' in col2):
-                current_block.bus = col3 if 'Bus' in col3 else col2
-                current_block.driver = col7
+                if current_block:
+                    current_block.bus = col3 if 'Bus' in col3 else col2
+                    current_block.driver = col7
+                    current_block.is_assigned = any(g.is_me for g in current_block.guides)
+                    blocks.append(current_block)
+                    current_block = None
                 continue
 
             if col7 and col7.lower() not in all_guide_identifiers:
@@ -376,11 +435,11 @@ class SeaPlanService:
                     pax_a = int(row[9]) if row[9].isdigit() else 0
                     pax_c = int(row[10]) if row[10].isdigit() else 0
                     pax_i = int(row[11]) if row[11].isdigit() else 0
+                    
                     pax_str = f"{pax_a}/{pax_c}/{pax_i}"
                     total_pax = pax_a + pax_c + pax_i
                     if total_pax == 0: continue
-                except:
-                    continue
+                except: continue
 
                 current_block.guests.append(GuestDTO(
                     voucher=col2 or "N/A",
@@ -398,7 +457,19 @@ class SeaPlanService:
         if current_block:
             blocks.append(current_block)
 
-        return [b for b in blocks if b.is_assigned]
+        # Calculate accumulated pax_string for each assigned block
+        assigned = [b for b in blocks if b.is_assigned]
+        for b in assigned:
+            a, c, i = 0, 0, 0
+            for g in b.guides:
+                parts = g.pax.split('/')
+                a += int(parts[0]); c += int(parts[1]); i += int(parts[2])
+            for gst in b.guests:
+                parts = gst.pax.split('/')
+                a += int(parts[0]); c += int(parts[1]); i += int(parts[2])
+            b.pax_string = f"{a}/{c}/{i}"
+
+        return assigned
 
     async def get_guest_list(self, target_date: datetime.date, program_names: list[str]) -> List[GuestDTO]:
         """

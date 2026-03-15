@@ -23,6 +23,19 @@ class LoggingMiddleware(BaseMiddleware):
         user = event.from_user
         user_info = f"@{user.username}" if user.username else f"id:{user.id}"
 
+        # Impersonation Check (Tester Mode)
+        impersonated_user = None
+        redis = data.get("state").storage.redis if hasattr(data.get("state"), "storage") and hasattr(data.get("state").storage, "redis") else None
+        
+        if redis:
+            import json
+            imp_key = f"impersonation:{user.id}"
+            imp_data = await redis.get(imp_key)
+            if imp_data:
+                impersonated_user = json.loads(imp_data)
+                user_info = f"@{user.username or user.id} (as @{impersonated_user['username']})"
+                data["impersonated_user"] = impersonated_user
+
         if isinstance(event, Message):
             content = event.text or f"[{event.content_type}]"
             logger.info(f"MSG  | {user_info} | {content[:80]}")

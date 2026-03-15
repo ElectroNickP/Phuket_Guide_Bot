@@ -72,8 +72,8 @@ async def main():
     dp.errors.register(handle_error)
 
     # ─── Register Middleware (applies to all routers) ─────────────────────────
-    dp.message.middleware(LoggingMiddleware())
-    dp.callback_query.middleware(LoggingMiddleware())
+    dp.message.outer_middleware(LoggingMiddleware())
+    dp.callback_query.outer_middleware(LoggingMiddleware())
 
     # ─── Register Routers ─────────────────────────────────────────────────────
     dp.include_router(common.router)

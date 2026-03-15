@@ -4,7 +4,7 @@ def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton(text="📅 Моё расписание"), KeyboardButton(text="🌊 План на море")],
         [KeyboardButton(text="🚐 План на суше"), KeyboardButton(text="👤 Мой статус")],
-        [KeyboardButton(text="📝 Обратная связь")]
+        [KeyboardButton(text="🚀 Начать программу"), KeyboardButton(text="📝 Обратная связь")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -13,7 +13,7 @@ def get_admin_menu_keyboard(is_super_admin: bool = False):
         [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="🌊 Мониторинг моря")],
         [KeyboardButton(text="🚐 Мониторинг суши"), KeyboardButton(text="📊 Статистика")],
         [KeyboardButton(text="🔍 Тест-Аудит"), KeyboardButton(text="📋 Job Order")],
-        [KeyboardButton(text="📅 Общее расписание")]
+        [KeyboardButton(text="📅 Общее расписание"), KeyboardButton(text="📝 Отчет за гида")]
     ]
     if is_super_admin:
         keyboard.append([KeyboardButton(text="⏱ Интервал"), KeyboardButton(text="📋 Логи")])
@@ -68,5 +68,46 @@ def get_general_schedule_date_keyboard():
     buttons = [
         [InlineKeyboardButton(text="Сегодня", callback_data="gs_date_today")],
         [InlineKeyboardButton(text="Завтра", callback_data="gs_date_tomorrow")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_report_date_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="Сегодня", callback_data="report_date_today")],
+        [InlineKeyboardButton(text="Завтра", callback_data="report_date_tomorrow")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_suggested_pax_keyboard(suggested_pax: str):
+    buttons = [
+        [InlineKeyboardButton(text=f"✅ {suggested_pax} (как в плане)", callback_data=f"report_pax_{suggested_pax}")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_suggested_cot_keyboard(suggested_cot: str):
+    buttons = [
+        [InlineKeyboardButton(text=f"✅ {suggested_cot} (как в плане)", callback_data=f"report_cot_{suggested_cot}")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_suggested_captain_keyboard(suggested_captain: str):
+    buttons = [
+        [InlineKeyboardButton(text=f"✅ {suggested_captain} (по плану)", callback_data="report_captain_suggested")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_suggested_status_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="✅ No problem", callback_data="report_status_ok")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_np_keyboard():
+    # Helper for selecting National Parks
+    buttons = [
+        [InlineKeyboardButton(text="NP PP", callback_data="report_np_PP")],
+        [InlineKeyboardButton(text="NP GB", callback_data="report_np_GB")],
+        [InlineKeyboardButton(text="NP HG", callback_data="report_np_HG")],
+        [InlineKeyboardButton(text="✅ Готово (Далее)", callback_data="report_np_done")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

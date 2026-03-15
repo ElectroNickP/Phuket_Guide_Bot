@@ -19,10 +19,16 @@ async def cmd_feedback(message: types.Message, state: FSMContext):
     await state.set_state(FeedbackState.waiting_for_feedback)
 
 @router.message(FeedbackState.waiting_for_feedback)
-async def process_feedback(message: types.Message, state: FSMContext, bot: Bot):
+async def process_feedback(message: types.Message, state: FSMContext, bot: Bot, **data):
     """Process and forward feedback to admin"""
+    # Impersonation Check (Tester Mode)
+    imp_user = data.get("impersonated_user")
+    
     feedback_text = message.text
-    user_info = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
+    if imp_user:
+        user_info = f"@{imp_user['username']} (ИМИТАЦИЯ от @{message.from_user.username})"
+    else:
+        user_info = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
     
     admin_msg = (
         f"📩 <b>Новое сообщение от гида!</b>\n\n"
