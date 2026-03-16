@@ -3,6 +3,7 @@ from typing import Callable, Awaitable, Any
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
 from loguru import logger
+from config import config
 
 
 class LoggingMiddleware(BaseMiddleware):
@@ -36,11 +37,43 @@ class LoggingMiddleware(BaseMiddleware):
                 user_info = f"@{user.username or user.id} (as @{impersonated_user['username']})"
                 data["impersonated_user"] = impersonated_user
 
+        # Update user_info_cache in bot if it's our MonitoringBot
+        bot = data.get("bot")
+        if bot and hasattr(bot, 'user_info_cache'):
+            # user_info here is either @username or id:123
+            # We want to store a readable name for this chat/user
+            name_val = f"@{user.username}" if user.username else user.full_name
+            bot.user_info_cache[user.id] = name_val
+
+        # Prepare log message for Telegram channel
+        log_text = None
+        is_admin = user.id in config.admin_id_list or user.username in config.admin_username_list
+        
+        if config.ACTION_LOG_ENABLED and not is_admin:
+            if isinstance(event, Message):
+                content = event.text or f"[{event.content_type}]"
+                log_text = f"👤 <b>{user_info}</b>\n➡️ action: <code>{content[:200]}</code>"
+            elif isinstance(event, CallbackQuery):
+                log_text = f"👤 <b>{user_info}</b>\n🔘 button: <code>{event.data}</code>"
+
         if isinstance(event, Message):
             content = event.text or f"[{event.content_type}]"
             logger.info(f"MSG  | {user_info} | {content[:80]}")
         elif isinstance(event, CallbackQuery):
             logger.info(f"CBQ  | {user_info} | data={event.data}")
+
+        if log_text:
+            try:
+                # Use bot from data to send log
+                bot = data.get("bot")
+                if bot:
+                    await bot.send_message(
+                        chat_id=config.ACTION_LOG_CHANNEL_ID,
+                        text=log_text,
+                        parse_mode="HTML"
+                    )
+            except Exception as e:
+                logger.error(f"Error sending to log channel: {e}")
 
         try:
             result = await handler(event, data)

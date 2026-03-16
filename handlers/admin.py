@@ -18,7 +18,7 @@ import html
 from services.sea_plan import sea_plan_service
 from services.image_generator import job_order_generator
 from utils.message_utils import send_long_message
-from utils.keyboards import get_job_order_date_keyboard, get_general_schedule_date_keyboard
+from utils.keyboards import get_job_order_date_keyboard, get_general_schedule_date_keyboard, get_monitor_date_keyboard
 
 # List of all reply keyboard buttons to prevent state hijacking
 MENU_BUTTONS = [
@@ -93,7 +93,6 @@ class IsTesterFilter(BaseFilter):
 class AdminStates(StatesGroup):
     waiting_for_spreadsheet_id = State()
     waiting_for_sea_spreadsheet_id = State()
-    waiting_for_monitor_username = State()
     waiting_for_land_monitor_username = State()
     waiting_for_guide_name_sea = State()
     waiting_for_job_order_guide = State()
@@ -198,57 +197,162 @@ async def cmd_admin_report_proxy(message: types.Message, state: FSMContext):
     await state.set_state(AdminReportStates.waiting_for_username)
 
 @router.message(AdminReportStates.waiting_for_username)
-async def process_admin_report_username(message: types.Message, state: FSMContext):
+async def process_admin_report_username(message: types.Message, state: FSMContext, **data):
     username = message.text.strip().replace("@", "")
     await state.update_data(proxy_username=username)
     
     # We trigger the same start_report flow but with proxy_username in data
-    from handlers.guide import ReportStates, get_report_date_keyboard
-    await message.answer(
-        f"👤 Вы сдаете отчет за <b>@{username}</b>.\n\n"
-        "Для какого дня создать отчет?",
-        parse_mode="HTML",
-        reply_markup=get_report_date_keyboard()
-    )
-    await state.set_state(ReportStates.waiting_for_report_date)
+    # Bypass date selection, default to Today
+    from handlers.guide import _initiate_report_filling, get_phuket_now
+    
+    target_date = get_phuket_now().date()
+    await message.answer(f"👤 Вы сдаете отчет за <b>@{username}</b>.", parse_mode="HTML")
+    await _initiate_report_filling(message, state, target_date, **data)
 
 @router.message(F.text == "👁 Мониторинг гидов", RoleFilter(ADMIN_ALL))
 async def cmd_monitor_guides(message: types.Message, state: FSMContext):
-    await message.answer("👥 Введи username гида (через @), чье расписание ты хочешь посмотреть:")
-    await state.set_state(AdminStates.waiting_for_monitor_username)
+    await _cmd_monitor_guides_base(message)
 
-@router.message(AdminStates.waiting_for_monitor_username, ~F.text.in_(MENU_BUTTONS))
-async def process_guide_monitor(message: types.Message, state: FSMContext):
-    target_username = message.text.replace("@", "").strip()
+async def _cmd_monitor_guides_base(message: types.Message, is_callback: bool = False):
+    if is_callback:
+        await message.edit_text("🔍 Загружаю список всех гидов...")
+    else:
+        await message.answer("🔍 Загружаю список всех гидов...")
     
     sheet = await google_sheets.get_current_month_sheet()
     if not sheet:
-        await message.answer("❌ Не удалось найти лист с расписанием.")
-        await state.clear()
+        if is_callback: await message.edit_text("❌ Не удалось найти лист с расписанием.")
+        else: await message.answer("❌ Не удалось найти лист с расписанием.")
         return
 
     staff, freelance = await google_sheets.parse_guides(sheet)
-    all_guides = staff + freelance
-    guide_info = next((g for g in all_guides if g['username'].lower() == target_username.lower()), None)
+    
+    if not staff and not freelance:
+        if is_callback: await message.edit_text("❌ Гиды не найдены в таблице.")
+        else: await message.answer("❌ Гиды не найдены в таблице.")
+        return
 
-    if not guide_info:
-        await message.answer(f"❌ Гид @{target_username} не найден в таблице.")
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🏢 Штатные гиды", callback_data="mon_v2_list_staff"))
+    builder.row(types.InlineKeyboardButton(text="🌍 Фрилансеры", callback_data="mon_v2_list_freelance"))
+    builder.row(types.InlineKeyboardButton(text="📊 Показать всё расписание", callback_data="mon_v2_all"))
+    
+    text = (f"👥 <b>Мониторинг гидов</b>\n"
+            f"Штат: {len(staff)}, Фриланс: {len(freelance)}\n\n"
+            "Выберите категорию или посмотрите общее расписание:")
+            
+    if is_callback:
+        await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     else:
-        # Show today/tomorrow schedule for this guide
-        today = get_phuket_now().day
-        tomorrow = (get_phuket_now() + datetime.timedelta(days=1)).day
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+@router.callback_query(F.data == "mon_v2_main")
+async def process_monitor_main(callback: types.CallbackQuery):
+    await _cmd_monitor_guides_base(callback.message, is_callback=True)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("mon_v2_list_"))
+async def process_admin_monitor_type(callback: types.CallbackQuery):
+    gtype = callback.data.replace("mon_v2_list_", "") # 'staff' or 'freelance'
+    
+    sheet = await google_sheets.get_current_month_sheet()
+    staff, freelance = await google_sheets.parse_guides(sheet)
+    guides = staff if gtype == 'staff' else freelance
+    
+    builder = InlineKeyboardBuilder()
+    for g in guides:
+        builder.button(text=f"👤 @{g['username']}", callback_data=f"mon_v2_user_{g['username']}")
+    
+    builder.row(types.InlineKeyboardButton(text="⬅️ Назад", callback_data="mon_v2_main"))
+    builder.adjust(2)
+    
+    title = "🏢 Штатные гиды" if gtype == 'staff' else "🌍 Фрилансеры"
+    await callback.message.edit_text(
+        f"👥 <b>{title}</b>\n"
+        f"Всего: {len(guides)}\n\n"
+        "Выберите гида для просмотра расписания:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "ignore")
+async def process_ignore_callback(callback: types.CallbackQuery):
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("mon_v2_user_"))
+async def process_admin_monitor_user_v2(callback: types.CallbackQuery):
+    username = callback.data.split("_", 3)[3]
+    await callback.answer(f"Загружаю @{username}...")
+    
+    data = await google_sheets.get_guide_4day_data(username)
+    
+    response = f"👁 <b>Архив/Мониторинг: @{username}</b>\n\n"
+    for item in data:
+        response += f"{item['label']} ({item['date'].strftime('%d.%m')}): <b>{item['sched']}</b>\n"
+
+    # Add a back button
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⬅️ Назад", callback_data="mon_v2_main")
+    
+    await callback.message.answer(response, parse_mode="HTML", reply_markup=builder.as_markup())
+
+@router.callback_query(F.data == "mon_v2_all")
+async def process_admin_monitor_all_v2(callback: types.CallbackQuery):
+    await callback.answer("Собираю общее расписание...")
+    
+    current_sheet = await google_sheets.get_current_month_sheet()
+    staff, freelance = await google_sheets.parse_guides(current_sheet)
+    all_guides = staff + freelance
+    
+    now = get_phuket_now().date()
+    dates = [
+        ("⏮ Вчера", now - datetime.timedelta(days=1)),
+        ("📅 Сегодня", now),
+        ("📅 Завтра", now + datetime.timedelta(days=1)),
+        ("⏭ Послезавтра", now + datetime.timedelta(days=2))
+    ]
+    
+    # Pre-fetch sheets and guide maps for each date to optimize
+    date_sheets = {}
+    sheet_guide_maps = {} # {sheet_title: {username: row}}
+    
+    for _, dt in dates:
+        sh = await google_sheets.get_sheet_by_date(dt)
+        if sh:
+            date_sheets[dt] = sh
+            if sh.title not in sheet_guide_maps:
+                s, f = await google_sheets.parse_guides(sh)
+                sheet_guide_maps[sh.title] = {x['username'].lower(): x['row'] for x in s+f}
+
+    await callback.message.answer(f"📊 <b>Сводное расписание ({len(all_guides)} гидов):</b>")
+    
+    for g in all_guides:
+        uname_lower = g['username'].lower()
+        response = f"👁 <b>Архив/Мониторинг: @{g['username']}</b>\n\n"
+        has_data = False
         
-        sched_today = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=today)
-        sched_tomorrow = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=tomorrow)
+        for label, dt in dates:
+            sh = date_sheets.get(dt)
+            if not sh:
+                response += f"{label} ({dt.strftime('%d.%m')}): ❌ Лист не найден\n"
+                continue
+            
+            row_map = sheet_guide_maps.get(sh.title, {})
+            ridx = row_map.get(uname_lower)
+            
+            if ridx:
+                sched = await google_sheets.get_guide_schedule(sh, ridx, dt)
+                response += f"{label} ({dt.strftime('%d.%m')}): <b>{sched or '---'}</b>\n"
+                if sched: has_data = True
+            else:
+                response += f"{label} ({dt.strftime('%d.%m')}): ❌ Не найден\n"
         
-        type_str = "Штат" if guide_info['type'] == "staff" else "Фриланс"
-        
-        await message.answer(
-            f"👁 <b>Архив/Мониторинг: @{target_username}</b> ({type_str})\n\n"
-            f"📅 Сегодня ({today}): <b>{sched_today or '---'}</b>\n"
-            f"📅 Завтра ({tomorrow}): <b>{sched_tomorrow or '---'}</b>",
-            parse_mode="HTML"
-        )
+        if has_data:
+            await callback.message.answer(response, parse_mode="HTML")
+            await asyncio.sleep(0.3)
+
+    await callback.message.answer("✅ Мониторинг завершен.")
     
     await state.clear()
 
@@ -279,6 +383,7 @@ async def process_admin_sea_date_select(callback: types.CallbackQuery, state: FS
         builder = InlineKeyboardBuilder()
         for uname in active_guides:
             builder.button(text=f"👤 @{uname}", callback_data=f"admsea_user_{date_str}_{uname}")
+        builder.button(text="👁 Показать всех", callback_data=f"admsea_all_{date_str}")
         builder.adjust(2)
         await callback.message.answer(
             f"🌊 <b>Работающие на море ({date_str}):</b>\n"
@@ -349,6 +454,29 @@ async def _send_admin_sea_plans(target_username: str, message: types.Message):
     if not found_any:
         await message.answer(f"❌ План на море для @{target_username} на сегодня/завтра не найден.")
 
+@router.callback_query(F.data.startswith("admsea_all_"))
+async def process_admin_sea_all(callback: types.CallbackQuery):
+    # data: admsea_all_{date_str}
+    parts = callback.data.split("_")
+    date_str = parts[2]
+    
+    target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
+    
+    await callback.answer(f"Начинаю сборку планов на {date_str}. Это может занять время...")
+    active_guides = await sea_plan_service.get_active_sea_guides([target_date])
+    
+    if not active_guides:
+        await callback.message.answer(f"❌ Активных гидов на {date_str} не найдено.")
+        return
+
+    await callback.message.answer(f"📊 <b>Сводка по всем гидам (МОРЕ) на {date_str}:</b>")
+    
+    for uname in active_guides:
+        await _send_admin_sea_plans_single(uname, target_date, callback.message)
+        await asyncio.sleep(0.5) # Anti-flood delay
+
+    await callback.message.answer("✅ Отправка всех планов завершена.")
+
 @router.callback_query(F.data.startswith("admsea_"))
 async def process_admin_sea_guide_select_legacy(callback: types.CallbackQuery, state: FSMContext):
     # Fallback for old style buttons
@@ -384,6 +512,7 @@ async def process_admin_land_date_select(callback: types.CallbackQuery, state: F
         builder = InlineKeyboardBuilder()
         for uname in active_guides:
             builder.button(text=f"👤 @{uname}", callback_data=f"admland_user_{date_str}_{uname}")
+        builder.button(text="👁 Показать всех", callback_data=f"admland_all_{date_str}")
         builder.adjust(2)
         await callback.message.answer(
             f"🚐 <b>Гиды переведенные на сушу ({date_str}):</b>\n"
@@ -411,6 +540,33 @@ async def process_admin_land_user_select(callback: types.CallbackQuery):
     await callback.answer(f"Загружаю @{username}...")
     plans = await sea_plan_service.get_guide_land_plan(username, target_date)
     await _send_admin_land_plans(username, target_date, plans, callback.message)
+
+@router.callback_query(F.data.startswith("admland_all_"))
+async def process_admin_land_all(callback: types.CallbackQuery):
+    # data: admland_all_{date_str}
+    parts = callback.data.split("_")
+    date_str = parts[2]
+    
+    target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
+    
+    await callback.answer(f"Начинаю сборку планов на {date_str}. Это может занять время...")
+    active_guides = await sea_plan_service.get_active_land_guides([target_date])
+    
+    if not active_guides:
+        await callback.message.answer(f"❌ Активных гидов на {date_str} не найдено.")
+        return
+
+    await callback.message.answer(f"📊 <b>Сводка по всем гидам (СУША) на {date_str}:</b>")
+    
+    for uname in active_guides:
+        plans = await sea_plan_service.get_guide_land_plan(uname, target_date)
+        if plans:
+            await _send_admin_land_plans(uname, target_date, plans, callback.message)
+            await asyncio.sleep(0.5) # Anti-flood delay
+        else:
+            await callback.message.answer(f"❌ План на суше для @{uname} на {date_str} не найден.")
+
+    await callback.message.answer("✅ Отправка всех планов завершена.")
 
 @router.callback_query(F.data.startswith("admland_"))
 async def process_admin_land_guide_select_legacy(callback: types.CallbackQuery, state: FSMContext):
@@ -612,43 +768,69 @@ async def _send_admin_land_plans(username: str, target_date: datetime.date, plan
         await message.answer(f"🚐 План на суше для @{username} не найден на {target_date.strftime('%d.%m')}.")
         return
 
-    for plan in plans:
-        response = f"🚐 <b>ADMIN VIEW: @{username}</b>\n"
-        response += f"🏝️ <b>Program:</b> {plan.program}\n"
-        response += f"📅 <b>Date:</b> {plan.date}\n"
-        response += f"🪑 <b>Total PAX:</b> {plan.pax_string}\n"
+    for i, plan in enumerate(plans):
+        # Format Phone Number with Robust Global Matcher
+        driver_info = plan.driver or "---"
+        # We escape the whole string first for safety
+        driver_display = html.escape(driver_info)
+        
+        def _replace_phone(m):
+            raw_inside = m.group(1)
+            # Remove all non-digits to check if it's a phone number
+            digits = re.sub(r'\D', '', raw_inside)
+            if len(digits) >= 9:
+                return f"(<a href=\"tel:{digits}\">{raw_inside}</a>)"
+            return m.group(0) # String already escaped, group(0) includes escaped chars
+            
+        # Global replace for all occurrences in parentheses
+        driver_display = re.sub(r'\(([^)]+)\)', _replace_phone, driver_display)
+
+        # First Hotel info
+        first_hotel_info = "---"
+        if plan.guests:
+            first = plan.guests[0]
+            first_hotel_info = f"{first.pickup} <code>{first.hotel}</code>"
+
+        # COT summing or listing
+        cot_info = "---"
+        if plan.guests:
+            cots = []
+            for g in plan.guests:
+                try:
+                    cot_val = str(g.cot).strip()
+                    if cot_val and cot_val != "0" and cot_val != "-":
+                        cots.append(f"{cot_val} ({g.name})")
+                except: continue
+            if cots:
+                cot_info = "\n" + "\n".join(cots)
+
+        response = (
+            f"🚐 <b>ADMIN VIEW: @{username}</b>\n"
+            f"📅 <b>Date:</b> {plan.date}\n"
+            f"🏝️ <b>Program:</b> {plan.program}\n"
+            f"🪑 <b>Total PAX:</b> {plan.pax_string}\n"
+        )
         
         if plan.guides:
             guide_infos = []
             for g in plan.guides:
-                # Try to extract @username from full_info if possible
-                # full_info looks like "FALLA BOGOMOLETS   @BE_Ella00"
                 parts = g.full_info.split('@')
                 uname_tag = f"@{parts[1].strip()}" if len(parts) > 1 else g.full_info
                 guide_infos.append(f"{uname_tag} (P/U: {g.pickup_time} @ {g.pickup_location})")
-            
             response += f"🧭 <b>Guide(s):</b> {', '.join(guide_infos)}\n"
             
         if plan.bus:
             response += f"🚌 <b>Bus:</b> <code>{plan.bus}</code>\n"
-        if plan.driver:
-            response += f"👨‍✈️ <b>Driver:</b> {plan.driver}\n"
         
-        if plan.guests:
-            response += "\n👫 <b>Guest List:</b>\n\n"
-            for g in plan.guests:
-                response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
-                response += f"    <b>Pickup:</b> {g.pickup}\n"
-                response += f"    <b>Hotel:</b> <code>{g.hotel} ({g.area})</code> (RM: {g.room})\n"
-                response += f"    <b>Name:</b> <code>{g.name}</code>\n"
-                if g.phone and g.phone != "-":
-                    response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
-                if g.remarks and g.remarks != "-":
-                    response += f"    <b>Remarks:</b> {g.remarks}\n"
-                response += f"    💵 <b>COT:</b> <code>{g.cot}</code>\n"
-                response += "\n"
+        response += f"👨‍✈️ <b>Driver:</b> {driver_display}\n"
+        response += f"💵 <b>COT:</b> {cot_info}\n\n"
+        response += f"🏨 <b>First hotel (P/U):</b> {first_hotel_info}\n"
         
-        await send_long_message(message, response, parse_mode="HTML")
+        # Add Guest List button
+        builder = InlineKeyboardBuilder()
+        builder.button(text="📋 Список гостей", callback_data=f"guestlist_land_{plan.date}_{i}_{username}")
+        
+        await message.answer(response, parse_mode="HTML", reply_markup=builder.as_markup())
 
 @router.message(F.text == "📊 Статистика", RoleFilter(ADMIN_ALL))
 async def cmd_stats_kb(message: types.Message):

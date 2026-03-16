@@ -1,4 +1,7 @@
+import datetime
+import re
 from utils.time import get_phuket_now, get_phuket_today
+import html
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -6,13 +9,16 @@ from services.google_sheets import google_sheets
 from services.sea_plan import sea_plan_service
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from database.models import UserRole
-from utils.keyboards import get_schedule_keyboard, get_sea_plan_keyboard, get_land_plan_keyboard, get_report_date_keyboard, get_np_keyboard, get_suggested_pax_keyboard, get_suggested_cot_keyboard, get_suggested_captain_keyboard, get_suggested_status_keyboard
+from config import config
+from database.models import UserRole, ReportSubmission
+from database.db import AsyncSessionLocal, update_user_activity
+from utils.keyboards import get_schedule_keyboard, get_sea_plan_keyboard, get_land_plan_keyboard, get_np_keyboard, get_suggested_pax_keyboard, get_suggested_cot_keyboard, get_suggested_captain_keyboard, get_suggested_status_keyboard
+from utils.message_utils import send_long_message
+from loguru import logger
 
 router = Router()
 
 class ReportStates(StatesGroup):
-    waiting_for_report_date = State()
     waiting_for_report_type = State() # Sea or Land
     waiting_for_report_pax = State()
     waiting_for_report_np = State()
@@ -23,38 +29,29 @@ class ReportStates(StatesGroup):
     waiting_for_report_confirm = State()
 
 @router.message(F.text == "🚀 Начать программу")
-async def cmd_start_report(message: types.Message, state: FSMContext):
-    """Entry point for Start Program report"""
-    await message.answer(
-        "🚀 <b>Начинаем формирование отчета!</b>\n\n"
-        "Для какого дня вы хотите создать отчет?",
-        parse_mode="HTML",
-        reply_markup=get_report_date_keyboard()
-    )
-    await state.set_state(ReportStates.waiting_for_report_date)
-
-@router.callback_query(F.data.startswith("report_date_"), ReportStates.waiting_for_report_date)
-async def process_report_date(callback: types.CallbackQuery, state: FSMContext, **data):
-    # Impersonation Check (Tester Mode)
-    imp_user = data.get("impersonated_user")
-    
-    is_tomorrow = "tomorrow" in callback.data
+async def cmd_start_report(message: types.Message, state: FSMContext, **data):
+    """Entry point for Start Program report - Bypasses date selection, defaults to Today"""
     target_date = get_phuket_now().date()
-    if is_tomorrow:
-        target_date += datetime.timedelta(days=1)
-    
+    await _initiate_report_filling(message, state, target_date, **data)
+
+async def _initiate_report_filling(message: types.Message, state: FSMContext, target_date: datetime.date, **data):
+    """Common logic to start report filling process for a specific date"""
     date_str = target_date.strftime("%d.%m")
     await state.update_data(target_date=target_date.isoformat(), date_str=date_str)
     
-    data = await state.get_data()
-    username = data.get("proxy_username") or (imp_user["username"] if imp_user else callback.from_user.username)
+    # Impersonation Check (Tester Mode)
+    imp_user = data.get("impersonated_user")
+    
+    state_data = await state.get_data()
+    username = state_data.get("proxy_username") or (imp_user["username"] if imp_user else message.from_user.username)
     
     if not username:
-        await callback.message.answer("❌ Ошибка: Не удалось определить @username.")
+        await message.answer("❌ Ошибка: Не удалось определить @username.")
         await state.clear()
         return
 
-    await callback.message.edit_text(f"🔍 Ищу программы для @{username} на {date_str}...")
+    # Use answer if it's a message, edit_text if it's a callback (though here it's always message now)
+    sent_msg = await message.answer(f"🔍 Ищу программы для @{username} на {date_str}...")
     
     # Check Sea Plan first
     sea_plans = await sea_plan_service.get_guide_sea_plan(username, target_date)
@@ -87,7 +84,7 @@ async def process_report_date(callback: types.CallbackQuery, state: FSMContext, 
             np_data={} # To store PP, GB, HG
         )
         
-        await callback.message.answer(
+        await message.answer(
             f"🌊 <b>Программа:</b> {', '.join([p.name for p in plan.programs])}\n"
             f"🚢 <b>Лодка:</b> {plan.boat}\n"
             f"👥 Введите <b>фактическое</b> количество пассажиров (взр/дет/инф) или нажмите кнопку ниже, если ничего не изменилось:\n"
@@ -127,7 +124,7 @@ async def process_report_date(callback: types.CallbackQuery, state: FSMContext, 
             
             reply_markup = get_suggested_pax_keyboard(pax_str) if pax_str != "0/0/0" else None
             
-            await callback.message.answer(
+            await message.answer(
                 f"🚐 <b>Программа:</b> {plan.program}\n\n"
                 f"👥 Введите <b>фактическое</b> количество пассажиров (взр/дет/инф)" + 
                 (" или нажмите кнопку ниже, если ничего не изменилось:\n" if reply_markup else ":\n") +
@@ -137,10 +134,9 @@ async def process_report_date(callback: types.CallbackQuery, state: FSMContext, 
             )
             await state.set_state(ReportStates.waiting_for_report_pax)
         else:
-            await callback.message.edit_text(f"❌ На {date_str} программы для @{username} не найдены.")
+            await sent_msg.edit_text(f"❌ На {date_str} программы для @{username} не найдены.")
             await state.clear()
     
-    await callback.answer()
 
 @router.message(ReportStates.waiting_for_report_captain)
 async def process_report_captain(message: types.Message, state: FSMContext):
@@ -219,12 +215,12 @@ async def _send_final_report(message_or_callback, state: FSMContext, status_text
     captain_label = "Captain" if is_sea else "Driver"
     
     status_icon = "✅" if status_text.strip().lower() == "no problem" else "⚠️"
+    program_name = data.get('program', '---')
     
     report = (
-        f"🚀 <b>Start program report</b>\n"
+        f"🚀 <b>{program_name}</b>\n"
         f"{status_icon} <b>Status:</b> {status_text}\n"
         f"👤 <b>Guide:</b> @{username}\n\n"
-        f"📋 <b>Program:</b> {data.get('program')}\n"
         f"📅 <b>Date:</b> {data.get('date_str')}\n"
         f"👤 <b>Thai guide:</b> {data.get('thai_guide')}\n"
         f"{boat_line}"
@@ -233,11 +229,13 @@ async def _send_final_report(message_or_callback, state: FSMContext, status_text
         f"👨‍✈️ <b>{captain_label}:</b> {data.get('captain')}\n"
         f"💵 <b>COT collected:</b> {data.get('cot')}\n"
         f"🚀 <b>Start program:</b> {data.get('start_time')}\n\n"
-        f"{hashtags}"
+        f"#Start_program_report_{date_formatted}"
     )
     
     if status_text.strip().lower() != "no problem":
         report += "\n\nNotify Hotline: @HOT_LINE"
+        
+    await state.update_data(final_report_text=report)
         
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Отправить", callback_data="report_confirm")
@@ -263,33 +261,57 @@ async def process_report_status(message: types.Message, state: FSMContext):
 @router.callback_query(F.data == "report_confirm", ReportStates.waiting_for_report_confirm)
 async def process_report_confirm(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_reply_markup(reply_markup=None)
+    
+    data = await state.get_data()
+    report_text = data.get("final_report_text")
+    
+    if report_text:
+        try:
+            await callback.bot.send_message(
+                chat_id=config.REPORT_GROUP_ID,
+                message_thread_id=config.REPORT_TOPIC_ID,
+                text=report_text,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send report to group {config.REPORT_GROUP_ID}: {e}")
+            await callback.message.answer(f"⚠️ Ошибка при отправке в группу: {e}")
+
+    # Record submission in DB
+    try:
+        async with AsyncSessionLocal() as session:
+            status_text = data.get("status", "No problem")
+            status_val = "ok" if status_text.strip().lower() == "no problem" else "problem"
+            
+            submission = ReportSubmission(
+                guide_username=data.get("proxy_username") or callback.from_user.username,
+                program_name=data.get("program", "Unknown"),
+                status=status_val,
+                date=get_phuket_now() # Normalized to today
+            )
+            session.add(submission)
+            await session.commit()
+    except Exception as e:
+        logger.error(f"Failed to record report submission: {e}")
+
     await callback.message.reply("✅ <b>Отчет успешно отправлен!</b>\n\nСпасибо, удачной программы!", parse_mode="HTML")
     await state.clear()
     await callback.answer()
 
 @router.callback_query(F.data == "report_edit", ReportStates.waiting_for_report_confirm)
-async def process_report_edit(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("❌ Заполнение отчета отменено. Вы можете начать заново, выбрав дату.", reply_markup=None)
+async def process_report_edit(callback: types.CallbackQuery, state: FSMContext, **data):
+    await callback.message.edit_text("❌ Заполнение отчета отменено. Начинаем заново...", reply_markup=None)
     
-    data = await state.get_data()
-    proxy_username = data.get("proxy_username")
+    # Preserve proxy_username if it exists
+    state_data = await state.get_data()
+    proxy_username = state_data.get("proxy_username")
     
     await state.clear()
-    
     if proxy_username:
         await state.update_data(proxy_username=proxy_username)
-        await callback.message.answer(
-            f"Выберите дату отчета за гида @{proxy_username}:",
-            reply_markup=get_report_date_keyboard()
-        )
-        await state.set_state(ReportStates.waiting_for_report_date)
-    else:
-        await callback.message.answer(
-            "Выберите дату для отчета:",
-            reply_markup=get_report_date_keyboard()
-        )
-        await state.set_state(ReportStates.waiting_for_report_date)
         
+    target_date = get_phuket_now().date()
+    await _initiate_report_filling(callback.message, state, target_date, **data)
     await callback.answer()
 
 @router.callback_query(F.data.startswith("report_pax_"), ReportStates.waiting_for_report_pax)
@@ -385,57 +407,29 @@ async def process_report_np_amount(message: types.Message, state: FSMContext):
     np_summary = "\n".join([f"• {k}: {v}" for k, v in np_data.items()])
     await message.answer(f"✅ <b>Введено:</b>\n{np_summary}\n\nПожалуйста, выберите следующий парк или нажмите «Готово»:", parse_mode="HTML", reply_markup=get_np_keyboard())
 @router.message(F.text == "📅 Моё расписание")
-async def cmd_schedule_buttons(message: types.Message):
-    """Show schedule buttons"""
-    await message.answer("📆 На какой день ты хочешь посмотреть расписание?", reply_markup=get_schedule_keyboard())
-
-@router.callback_query(F.data.startswith("sched_"))
-async def process_schedule_query(callback: types.CallbackQuery, **data):
-    """Process inline buttons for schedule"""
-    # Impersonation Check (Tester Mode)
-    imp_user = data.get("impersonated_user")
-    
-    await callback.message.edit_text("🔍 Ищу расписание...")
-    
-    sheet = await google_sheets.get_current_month_sheet()
-    if not sheet:
-        await callback.message.edit_text("❌ Не удалось найти лист с расписанием на текущий месяц.")
+async def cmd_schedule_4day(message: types.Message):
+    """Show 4-day schedule report directly"""
+    username = message.from_user.username
+    if not username:
+        await message.answer("❌ У тебя не установлен username в Телеграм. Пожалуйста, установи его.")
         return
-
-    staff, freelance = await google_sheets.parse_guides(sheet)
-    all_guides = staff + freelance
+        
+    sent_msg = await message.answer("🔍 Загружаю твоё расписание на 4 дня...")
     
-    user_username = imp_user["username"] if imp_user else callback.from_user.username
-    if not user_username:
-        await callback.message.edit_text("❌ У тебя не установлен username в Телеграм. Пожалуйста, установи его.")
-        return
-
-    guide_info = next((g for g in all_guides if g['username'].lower() == user_username.lower()), None)
-    
-    if not guide_info:
-        await callback.message.edit_text(f"❌ Я не нашел гида с username @{user_username} в таблице.")
-        return
-
-    is_tomorrow = "tomorrow" in callback.data
-    target_date = get_phuket_now()
-    if is_tomorrow:
-        target_date += datetime.timedelta(days=1)
-    
-    day = target_date.day
-    schedule = await google_sheets.get_guide_schedule(sheet, guide_info['row'], day=day)
-
-    date_str = "Завтра" if is_tomorrow else "Сегодня"
-    response = (
-        f"📋 <b>Расписание для @{user_username}</b>\n\n"
-        f"📅 {date_str} ({day}): <b>{schedule or 'Свободен'}</b>"
-    )
-    
-    await callback.message.edit_text(response, parse_mode="HTML")
-    await callback.answer()
-    
-    # Track activity
-    action = "tomorrow" if is_tomorrow else "today"
-    await update_user_activity(callback.from_user.id, action)
+    try:
+        data = await google_sheets.get_guide_4day_data(username)
+        
+        response = f"📋 <b>Расписание для @{username}</b>\n\n"
+        for item in data:
+            response += f"{item['label']} ({item['date'].strftime('%d.%m')}): <b>{item['sched']}</b>\n"
+            
+        await sent_msg.edit_text(response, parse_mode="HTML")
+        
+        # Track activity
+        await update_user_activity(message.from_user.id, "schedule_4day")
+    except Exception as e:
+        logger.exception(f"Error fetching 4-day schedule for @{username}: {e}")
+        await sent_msg.edit_text("❌ Произошла ошибка при получении расписания. Попробуй позже.")
 
 @router.message(F.text == "🌊 План на море")
 async def cmd_sea_plan(message: types.Message):
@@ -599,6 +593,56 @@ async def process_guest_list_guide(callback: types.CallbackQuery, **data):
     
     await send_long_message(callback.message, response)
 
+@router.callback_query(F.data.startswith("guestlist_land_"))
+async def process_guest_list_land(callback: types.CallbackQuery, **data):
+    # Impersonation Check (Tester Mode)
+    imp_user = data.get("impersonated_user")
+    try:
+        # data is guestlist_land_dd.mm_index_username
+        parts = callback.data.split('_', 4)
+        date_str = parts[2]
+        plan_idx = int(parts[3])
+        target_username = parts[4] if len(parts) > 4 else None
+        target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка формата данных", show_alert=True)
+        return
+
+    username = target_username or (imp_user["username"] if imp_user else callback.from_user.username)
+    if not username:
+        await callback.answer("Для работы требуется @username в Telegram.", show_alert=True)
+        return
+
+    plans = await sea_plan_service.get_guide_land_plan(username, target_date)
+    if not plans or plan_idx >= len(plans):
+        await callback.answer("Заказ не найден.", show_alert=True)
+        return
+
+    plan = plans[plan_idx]
+    
+    if not plan.guests:
+        await callback.message.answer(f"📋 Список гостей пуст для программы: {plan.program}")
+        return
+
+    await callback.answer("Загружаю список гостей...")
+
+    response = f"📋 <b>Список гостей ({date_str})</b>\n"
+    response += f"🚐 <b>{plan.program}</b>\n\n"
+    
+    for g in plan.guests:
+        response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
+        response += f"    <b>Pickup:</b> {g.pickup}\n"
+        response += f"    <b>Hotel:</b> <code>{g.hotel} ({g.area})</code> (RM: {g.room})\n"
+        response += f"    <b>Name:</b> <code>{g.name}</code>\n"
+        if g.phone and g.phone != "-":
+            response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
+        if g.remarks and g.remarks != "-":
+            response += f"    <b>Remarks:</b> {g.remarks}\n"
+        response += f"    💵 <b>COT:</b> <code>{g.cot}</code>\n"
+        response += "\n"
+    
+    await send_long_message(callback.message, response)
+
 @router.callback_query(F.data.startswith("land_"))
 async def process_land_plan_guide(callback: types.CallbackQuery, **data):
     # Impersonation Check (Tester Mode)
@@ -621,34 +665,63 @@ async def process_land_plan_guide(callback: types.CallbackQuery, **data):
         await callback.message.answer(f"🚐 <b>План на суше ({date_str})</b>\n\nНа этот день ваших заказов не найдено.", parse_mode="HTML")
         return
 
-    for plan in plans:
-        response = f"🚐 <b>Job Order: {plan.program}</b>\n"
-        response += f"📅 <b>Date:</b> {plan.date}\n\n"
+    for i, plan in enumerate(plans):
+        # Format Phone Number with Robust Global Matcher
+        driver_info = plan.driver or "---"
+        # We escape the whole string first for safety
+        driver_display = html.escape(driver_info)
+        
+        def _replace_phone(m):
+            raw_inside = m.group(1)
+            # Remove all non-digits to check if it's a phone number
+            digits = re.sub(r'\D', '', raw_inside)
+            if len(digits) >= 9:
+                return f"(<a href=\"tel:{digits}\">{raw_inside}</a>)"
+            return m.group(0) # String already escaped, group(0) includes escaped chars
+            
+        # Global replace for all occurrences in parentheses
+        driver_display = re.sub(r'\(([^)]+)\)', _replace_phone, driver_display)
+
+        # First Hotel info
+        first_hotel_info = "---"
+        if plan.guests:
+            first = plan.guests[0]
+            first_hotel_info = f"{first.pickup} <code>{first.hotel}</code>"
+
+        # COT summing or listing
+        cot_info = "---"
+        if plan.guests:
+            cots = []
+            for g in plan.guests:
+                try:
+                    cot_val = str(g.cot).strip()
+                    if cot_val and cot_val != "0" and cot_val != "-":
+                        cots.append(f"{cot_val} ({g.name})")
+                except: continue
+            if cots:
+                cot_info = "\n" + "\n".join(cots)
+
+        response = (
+            f"📅 <b>Date:</b> {plan.date}\n"
+            f"🏝️ <b>Program:</b> {plan.program}\n"
+            f"🪑 <b>Total PAX:</b> {plan.pax_string}\n"
+        )
         
         if plan.guides:
-            response += "👤 <b>Guide(s):</b>\n"
+            response += "🧭 <b>Guide(s):</b>\n"
             for g in plan.guides:
                 me_tag = " (ВЫ)" if g.is_me else ""
                 response += f"  • {g.full_info}{me_tag} (P/U: {g.pickup_time} @ {g.pickup_location})\n"
-            response += "\n"
-            
+        
         if plan.bus:
             response += f"🚌 <b>Bus:</b> <code>{plan.bus}</code>\n"
-        if plan.driver:
-            response += f"👨‍✈️ <b>Driver:</b> {plan.driver}\n"
         
-        if plan.guests:
-            response += "\n👫 <b>Guest List:</b>\n\n"
-            for g in plan.guests:
-                response += f"  • <b>V/C:</b> <code>{g.voucher}</code> | <b>Pax:</b> {g.pax}\n"
-                response += f"    <b>Pickup:</b> {g.pickup}\n"
-                response += f"    <b>Hotel:</b> <code>{g.hotel} ({g.area})</code> (RM: {g.room})\n"
-                response += f"    <b>Name:</b> <code>{g.name}</code>\n"
-                if g.phone and g.phone != "-":
-                    response += f"    <b>Phone:</b> <code>{g.phone}</code>\n"
-                if g.remarks and g.remarks != "-":
-                    response += f"    <b>Remarks:</b> {g.remarks}\n"
-                response += f"    💵 <b>COT:</b> <code>{g.cot}</code>\n"
-                response += "\n"
+        response += f"👨‍✈️ <b>Driver:</b> {driver_display}\n"
+        response += f"💵 <b>COT:</b> {cot_info}\n\n"
+        response += f"🏨 <b>First hotel (P/U):</b> {first_hotel_info}\n"
         
-        await send_long_message(callback.message, response)
+        # Add Guest List button
+        builder = InlineKeyboardBuilder()
+        builder.button(text="📋 Список гостей", callback_data=f"guestlist_land_{date_str}_{i}_{username}")
+        
+        await callback.message.answer(response, parse_mode="HTML", reply_markup=builder.as_markup())

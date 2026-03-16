@@ -71,10 +71,16 @@ def get_general_schedule_date_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_report_date_keyboard():
+def get_monitor_date_keyboard():
     buttons = [
-        [InlineKeyboardButton(text="Сегодня", callback_data="report_date_today")],
-        [InlineKeyboardButton(text="Завтра", callback_data="report_date_tomorrow")]
+        [
+            InlineKeyboardButton(text="⏮ Вчера", callback_data="mon_date_yesterday"),
+            InlineKeyboardButton(text="📅 Сегодня", callback_data="mon_date_today")
+        ],
+        [
+            InlineKeyboardButton(text="📅 Завтра", callback_data="mon_date_tomorrow"),
+            InlineKeyboardButton(text="⏭ Послезавтра", callback_data="mon_date_after")
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

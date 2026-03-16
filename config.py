@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     DEFAULT_SEA_SPREADSHEET_ID: str = "1wtSeYmTnwcC5d-AxNt3zLaMZhe5-mRXfYJ-gm4nJQ7E"
     SERVICE_ACCOUNT_FILE: str = "google service account/best-telegram-bots-9df5029c28e8.json"
     TESTER_USERNAMES: str = "ElectroNick_X, pankonick"  # Authorized to use /become_user
+    REPORT_GROUP_ID: int = -1003556020066
+    REPORT_TOPIC_ID: int = 6
+    ACTION_LOG_CHANNEL_ID: int = -1003831769874
+    ACTION_LOG_ENABLED: bool = True
     
     # Database settings
     DB_URL: str = "sqlite+aiosqlite:///data/bot_database.db"

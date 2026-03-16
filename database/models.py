@@ -59,3 +59,14 @@ class AppSettings(Base):
     key = Column(String, primary_key=True)
     value = Column(String)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class ReportSubmission(Base):
+    """Tracks guide report submissions"""
+    __tablename__ = 'report_submissions'
+    
+    id = Column(Integer, primary_key=True)
+    guide_username = Column(String, nullable=False)
+    program_name = Column(String, nullable=False)
+    status = Column(String, default="ok") # "ok" or "problem"
+    date = Column(DateTime, nullable=False)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)

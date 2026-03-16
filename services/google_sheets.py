@@ -23,6 +23,8 @@ class GoogleSheetsService:
         self.client = gspread.authorize(self.credentials)
         self._spreadsheet = None
         self._current_spreadsheet_id = None
+        self._all_values_cache = {} # {sheet_title: (timestamp, values)}
+        self._merges_cache = {}     # {sheet_title: merges_list}
 
     async def get_spreadsheet_id(self):
         """Fetches spreadsheet ID from DB or config"""
@@ -52,17 +54,16 @@ class GoogleSheetsService:
                     return None
         return self._spreadsheet
 
-    async def get_current_month_sheet(self):
+    async def get_sheet_by_date(self, target_date: datetime.date):
         """
-        Finds the sheet for the current month.
+        Finds the sheet for a specific month/year.
         """
         spreadsheet = await self.get_spreadsheet()
         if not spreadsheet:
             return None
 
-        now = get_phuket_now()
-        month = f"{now.month:02d}"
-        year_short = str(now.year)[2:]
+        month = f"{target_date.month:02d}"
+        year_short = str(target_date.year)[2:]
         
         possible_names = [f"{month}.{year_short}", f"{month}/{year_short}"]
         
@@ -77,8 +78,14 @@ class GoogleSheetsService:
             if sheet.title.startswith(month):
                 return sheet
                 
-        logger.error(f"Sheet for month {month} not found!")
+        logger.error(f"Sheet for date {target_date} not found!")
         return None
+
+    async def get_current_month_sheet(self):
+        """
+        Finds the sheet for the current month.
+        """
+        return await self.get_sheet_by_date(get_phuket_now().date())
 
     async def parse_guides(self, sheet):
         """
@@ -114,9 +121,9 @@ class GoogleSheetsService:
             if not current_section:
                 continue
 
-            match = re.search(r'@(\w+)', str(value))
+            match = re.search(r'@([\w\d_]+)', str(value))
             if match:
-                username = match.group(1)
+                username = match.group(1).strip()
                 guide_data = {
                     "raw_name": value,
                     "username": username,
@@ -131,56 +138,105 @@ class GoogleSheetsService:
         logger.info(f"Parsed {len(staff_guides)} staff and {len(freelance_guides)} freelance guides")
         return staff_guides, freelance_guides
 
-    async def get_guide_schedule(self, sheet, guide_row, day=None):
-        if day is None:
-            day = get_phuket_now().day
+    async def _get_cached_values(self, sheet):
+        cache_key = f"{sheet.spreadsheet.id}_{sheet.title}"
+        now = datetime.datetime.now()
+        if cache_key in self._all_values_cache:
+            ts, values = self._all_values_cache[cache_key]
+            if (now - ts).total_seconds() < 60:
+                return values
+        
+        values = await asyncio.to_thread(sheet.get_all_values)
+        self._all_values_cache[cache_key] = (now, values)
+        return values
+
+    async def _get_cached_merges(self, sheet):
+        sheet_title = sheet.title
+        if sheet_title in self._merges_cache:
+            return self._merges_cache[sheet_title]
             
-        # Run blocking call in thread pool
-        all_values = await asyncio.to_thread(sheet.get_all_values)
+        try:
+            metadata = await asyncio.to_thread(sheet.spreadsheet.fetch_sheet_metadata)
+            sheet_meta = next((s for s in metadata['sheets'] if s['properties']['title'] == sheet_title), None)
+            merges = sheet_meta.get('merges', []) if sheet_meta else []
+            self._merges_cache[sheet_title] = merges
+            return merges
+        except Exception as e:
+            logger.error(f"Error fetching merges for {sheet_title}: {e}")
+            return []
+
+    async def get_guide_schedule(self, sheet, guide_row, target_date: datetime.date = None):
+        if target_date is None:
+            target_date = get_phuket_now().date()
+        
+        day = target_date.day
+        all_values = await self._get_cached_values(sheet)
         if not all_values or guide_row > len(all_values):
             return None
             
         header = all_values[0]
-        row_values = all_values[guide_row - 1]
-        
-        # 1. Dynamically find the column for the day
-        # We look for a cell in the first row that matches the day number (string)
-        target_col_idx = -1
-        day_str = str(day)
+        # Find column by searching for the day number
+        target_col = -1
+        day_str = str(day).strip()
         for i, val in enumerate(header):
-            if val.strip() == day_str:
-                target_col_idx = i
+            if str(val).strip() == day_str:
+                target_col = i
                 break
         
-        # Fallback to hardcoded logic if header parsing fails
-        if target_col_idx == -1:
-            target_col_idx = 1 + day # Column C is Index 2, which is Day 1. So Day N is N+1? No, 2+N-1 = N+1.
-            # My previous was 2+day which is N+2. Let's be careful.
-            # C is Col 3 (Index 2). Day 1. 2 + 1 = 3 (Index 2). Correct.
-            target_col_idx = 2 + day - 1 # Index 2 for Day 1.
-        
-        if len(row_values) <= target_col_idx:
-            return None
+        if target_col == -1:
+            target_col = 2 + day - 1
             
-        value = row_values[target_col_idx].strip()
+        row_values = all_values[guide_row - 1]
+        value = row_values[target_col].strip() if target_col < len(row_values) else ""
         
-        # --- Multi-day / Merged Cells Support ---
-        if not value:
-            day_off_markers = ["ВЫХ", "OFF", "VACATION", "RESERVE", "РЕЗЕРВ"]
+        if value:
+            return value
             
-            # Look back up to 5 days (some programs are long)
-            # Stay within the schedule bounds (start looking from target_col_idx - 1)
-            # Column C (Index 2) is the start of the schedule
-            for back_idx in range(target_col_idx - 1, 1, -1):
-                if back_idx >= len(row_values):
-                    continue
+        # Merged Check
+        merges = await self._get_cached_merges(sheet)
+        r_idx = guide_row - 1
+        c_idx = target_col
+        
+        for m in merges:
+            if (m['startRowIndex'] <= r_idx < m['endRowIndex'] and 
+                m['startColumnIndex'] <= c_idx < m['endColumnIndex']):
+                sr, sc = m['startRowIndex'], m['startColumnIndex']
+                if sr < len(all_values) and sc < len(all_values[sr]):
+                    merged_val = all_values[sr][sc].strip()
+    async def get_guide_4day_data(self, username: str):
+        """Fetches 4-day schedule data for a specific username (Yesterday to After Tomorrow)"""
+        now = get_phuket_now().date()
+        date_list = [
+            ("⏮ Вчера", now - datetime.timedelta(days=1)),
+            ("📅 Сегодня", now),
+            ("📅 Завтра", now + datetime.timedelta(days=1)),
+            ("⏭ Послезавтра", now + datetime.timedelta(days=2))
+        ]
+        
+        results = []
+        sheet_row_cache = {} # {sheet_title: row_idx}
+        
+        for label, target_date in date_list:
+            sheet = await self.get_sheet_by_date(target_date)
+            if not sheet:
+                results.append({"label": label, "date": target_date, "sched": "❌ Лист не найден"})
+                continue
+            
+            # Find row in this specific sheet
+            if sheet.title not in sheet_row_cache:
+                s, f = await self.parse_guides(sheet)
+                all_g = s + f
+                guide = next((g for g in all_g if g['username'].lower() == username.lower()), None)
+                sheet_row_cache[sheet.title] = guide['row'] if guide else -1
+            
+            row_idx = sheet_row_cache[sheet.title]
+            if row_idx == -1:
+                results.append({"label": label, "date": target_date, "sched": "---"})
+                continue
                 
-                prev_val = row_values[back_idx].strip()
-                if prev_val:
-                    # We return the value even if it's a day off, because if it's merged, 
-                    # it means the day off continues.
-                    return prev_val
-                    
-        return value
+            sched = await self.get_guide_schedule(sheet, row_idx, target_date)
+            results.append({"label": label, "date": target_date, "sched": sched or "---"})
+        
+        return results
 
 google_sheets = GoogleSheetsService()

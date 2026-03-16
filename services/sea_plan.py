@@ -552,4 +552,66 @@ class SeaPlanService:
             remarks=r[15].strip(),
         )
 
+    async def get_expected_reports(self, target_date: datetime.date) -> List[Tuple[str, str, str]]:
+        """
+        Returns a list of (username, program_name, type) where type is 'SEA' or 'LAND'.
+        """
+        all_values = await self._get_worksheet_values(target_date)
+        if not all_values:
+            return []
+            
+        expected = []
+        
+        # 1. Collect from Sea Plan
+        current_boat = None
+        for i, row in enumerate(all_values):
+            if i > 250 and len(row) > 4:
+                if row[4].strip() == "TOTAL" or row[4].strip().startswith("JOB ORDER"):
+                    break
+            if len(row) < 16: continue
+            
+            row_boat = row[15].strip()
+            if row_boat:
+                current_boat = row_boat
+            
+            if not current_boat: continue
+            if "COMEBACK BOATS" in row[4].strip().upper(): continue
+            
+            guide_str = row[7].strip()
+            prog_name = row[4].strip()
+            
+            if prog_name and guide_str:
+                matches = re.findall(r'@(\w+)', guide_str)
+                for uname in matches:
+                    expected.append((uname.lower(), prog_name, "SEA"))
+        
+        # 2. Collect from Land Plan
+        is_land_section = False
+        current_land_prog = None
+        for row in all_values:
+            row_str = " ".join([str(v) for v in row if v]).upper()
+            if 'JOB ORDER' in row_str:
+                if 'PRIVATE LAND' in row_str or 'LAND JOINED' in row_str:
+                    is_land_section = True
+                else:
+                    is_land_section = False
+                continue
+            
+            if not is_land_section: continue
+            if len(row) < 5: continue
+            
+            # Header check
+            if row[4].strip() and not row[1].strip() and not row[7].strip():
+                current_land_prog = row[4].strip()
+            elif row[3].strip() and not row[1].strip() and not row[7].strip() and (' b' in row[3].lower() or 'bus' in row[3].lower()):
+                current_land_prog = row[3].strip()
+            
+            col1 = row[1].strip()
+            if '@' in col1:
+                matches = re.findall(r'@(\w+)', col1)
+                for uname in matches:
+                    expected.append((uname.lower(), current_land_prog or "Land Tour", "LAND"))
+                    
+        return expected
+
 sea_plan_service = SeaPlanService()
