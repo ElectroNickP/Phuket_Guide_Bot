@@ -7,8 +7,12 @@ from database.db import AsyncSessionLocal
 from database.models import User
 from sqlalchemy import select
 
+import pytest
+
+@pytest.mark.asyncio
 async def test_case_insensitivity():
     # Mock bot
+
     bot = AsyncMock(spec=Bot)
     
     # Mock time to 2:00 AM (when 2:50 pickup should trigger wake-up at 1:50)

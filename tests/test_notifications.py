@@ -5,8 +5,12 @@ from aiogram import Bot
 from config import config
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+@pytest.mark.asyncio
 async def test_notifications():
     # Mock bot
+
     bot = AsyncMock(spec=Bot)
     
     # Mock time to 6:45 AM (when 7:30 pickups should trigger wake-up at 6:30)

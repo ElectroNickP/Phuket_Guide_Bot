@@ -155,7 +155,7 @@ async def main():
 
     # ─── Register Routers ─────────────────────────────────────────────────────
     dp.include_router(common.router)
-    dp.include_router(admin.router)
+    dp.include_router(admin.admin_router)
     dp.include_router(feedback.router)
     dp.include_router(guide.router)
     dp.include_router(reports.router)
