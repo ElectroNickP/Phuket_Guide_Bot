@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import declarative_base, relationship
 import datetime
+from utils.time import get_phuket_now
 
 Base = declarative_base()
 
@@ -21,8 +22,9 @@ class User(Base):
     full_name = Column(String)
     role = Column(String, default=UserRole.GUIDE)
     guide_type = Column(String) # 'staff', 'freelance'
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    last_contact = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=get_phuket_now)
+    last_contact = Column(DateTime, default=get_phuket_now)
+    last_action = Column(String)
     
     # Activity counters
     count_today = Column(Integer, default=0)
@@ -32,6 +34,7 @@ class User(Base):
     count_feedback = Column(Integer, default=0)
     count_status = Column(Integer, default=0)
     count_start = Column(Integer, default=0)
+    count_finish = Column(Integer, default=0)
 
 class Log(Base):
     __tablename__ = 'logs'
@@ -40,7 +43,7 @@ class Log(Base):
     telegram_id = Column(Integer)
     username = Column(String)
     action = Column(String)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=get_phuket_now)
 
 class ScheduleCache(Base):
     """Stores last known schedule to detect changes"""
@@ -50,7 +53,7 @@ class ScheduleCache(Base):
     guide_username = Column(String)
     date = Column(DateTime)
     program_name = Column(String)
-    last_updated = Column(DateTime, default=datetime.datetime.utcnow)
+    last_updated = Column(DateTime, default=get_phuket_now)
 
 class AppSettings(Base):
     """Stores dynamic application settings like Spreadsheet ID"""
@@ -58,7 +61,7 @@ class AppSettings(Base):
     
     key = Column(String, primary_key=True)
     value = Column(String)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=get_phuket_now, onupdate=get_phuket_now)
 
 class ReportSubmission(Base):
     """Tracks guide report submissions"""
@@ -69,4 +72,20 @@ class ReportSubmission(Base):
     program_name = Column(String, nullable=False)
     status = Column(String, default="ok") # "ok" or "problem"
     date = Column(DateTime, nullable=False)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    report_type = Column(String, default="start") # "start" or "finish"
+    start_time = Column(String) # For "start" reports
+    end_time = Column(String) # For "finish" reports
+    timestamp = Column(DateTime, default=get_phuket_now)
+
+class WakeUpConfirmation(Base):
+    """Tracks guide wake-up confirmations"""
+    __tablename__ = 'wakeup_confirmations'
+    
+    id = Column(Integer, primary_key=True)
+    guide_username = Column(String, nullable=False)
+    date = Column(DateTime, nullable=False) # Program date
+    pickup_time = Column(String, nullable=False) # e.g. "08:50"
+    program_name = Column(String) # e.g. "City Tour b1"
+    status = Column(String, default="pending") # "pending", "confirmed", "problem", "no_response"
+    sent_at = Column(DateTime, default=get_phuket_now)
+    confirmed_at = Column(DateTime)

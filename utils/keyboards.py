@@ -4,16 +4,20 @@ def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton(text="📅 Моё расписание"), KeyboardButton(text="🌊 План на море")],
         [KeyboardButton(text="🚐 План на суше"), KeyboardButton(text="👤 Мой статус")],
-        [KeyboardButton(text="🚀 Начать программу"), KeyboardButton(text="📝 Обратная связь")]
+        [KeyboardButton(text="🚀 Начать программу"), KeyboardButton(text="🏁 Завершить программу")],
+        [KeyboardButton(text="📝 Обратная связь"), KeyboardButton(text="🆘 Нужна помощь")],
+        [KeyboardButton(text="📚 Библиотека гида")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 def get_admin_menu_keyboard(is_super_admin: bool = False):
     keyboard = [
-        [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="🌊 Мониторинг моря")],
-        [KeyboardButton(text="🚐 Мониторинг суши"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="🔍 Тест-Аудит"), KeyboardButton(text="📋 Job Order")],
-        [KeyboardButton(text="📅 Общее расписание"), KeyboardButton(text="📝 Отчет за гида")]
+        [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="👁 Контроль Смены")],
+        [KeyboardButton(text="🌊 Мониторинг моря"), KeyboardButton(text="🚐 Мониторинг суши")],
+        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="🔍 Тест-Аудит")],
+        [KeyboardButton(text="📋 Job Order"), KeyboardButton(text="📅 Общее расписание")],
+        [KeyboardButton(text="📝 Отчет за гида"), KeyboardButton(text="🔍 Тест Пробуждения")],
+        [KeyboardButton(text="🆘 Тест SOS")]
     ]
     if is_super_admin:
         keyboard.append([KeyboardButton(text="⏱ Интервал"), KeyboardButton(text="📋 Логи")])
@@ -104,7 +108,10 @@ def get_suggested_captain_keyboard(suggested_captain: str):
 
 def get_suggested_status_keyboard():
     buttons = [
-        [InlineKeyboardButton(text="✅ No problem", callback_data="report_status_ok")]
+        [
+            InlineKeyboardButton(text="✅ No problem", callback_data="report_status_ok"),
+            InlineKeyboardButton(text="⚠️ Problem", callback_data="report_status_problem"),
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

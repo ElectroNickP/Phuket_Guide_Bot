@@ -13,9 +13,18 @@ class Settings(BaseSettings):
     SERVICE_ACCOUNT_FILE: str = "google service account/best-telegram-bots-9df5029c28e8.json"
     TESTER_USERNAMES: str = "ElectroNick_X, pankonick"  # Authorized to use /become_user
     REPORT_GROUP_ID: int = -1003556020066
-    REPORT_TOPIC_ID: int = 6
+    REPORT_START_TOPIC_ID: int = 6
+    REPORT_FINISH_TOPIC_ID: int = 69
+    REPORT_TOPIC_ID: int = 6 # Backward compatibility or default
+    WAKEUP_LOG_TOPIC_ID: int = 45
+    HELP_TOPIC_ID: int = 102
+    SOS_NOTIFY_TARGET: str = "@HOT_LINE" # Who to tag in SOS messages
     ACTION_LOG_CHANNEL_ID: int = -1003831769874
     ACTION_LOG_ENABLED: bool = True
+    
+    # Duplicate report destination for land programs
+    LAND_REPORT_DUPLICATE_GROUP_ID: int | None = -1003777152879
+    LAND_REPORT_DUPLICATE_TOPIC_ID: int | None = 3
     
     # Database settings
     DB_URL: str = "sqlite+aiosqlite:///data/bot_database.db"

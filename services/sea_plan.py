@@ -11,6 +11,7 @@ import re
 import time
 from typing import List, Dict, Tuple
 from database.dto import GuestDTO, GuideDTO, LandPlanDTO, SeaPlanDTO, ProgramDTO
+from utils.time import is_time_format
 
 class SeaPlanService:
     def __init__(self):
@@ -26,6 +27,7 @@ class SeaPlanService:
         self._spreadsheet = None
         self._current_spreadsheet_id = None
         self._sheet_cache: Dict[Tuple[str, str], Tuple[float, List[List[str]]]] = {} # (sheet_id, worksheet_name) -> (timestamp, data)
+        self._worksheets_cache = {} # {sheet_id: (timestamp, dict {title: worksheet})}
         self._cache_ttl = 300 # 5 minutes
 
     async def get_spreadsheet_id(self):
@@ -56,6 +58,21 @@ class SeaPlanService:
                     return None
         return self._spreadsheet
 
+    async def _get_cached_worksheets_dict(self, spreadsheet):
+        """Fetches and caches all worksheets in a dict mapped by title."""
+        cache_key = spreadsheet.id
+        now = time.time()
+        if cache_key in self._worksheets_cache:
+            ts, wdict = self._worksheets_cache[cache_key]
+            if now - ts < self._cache_ttl:
+                return wdict
+        
+        logger.info(f"Fetching fresh worksheets list for Sea Plan {cache_key}")
+        worksheets = await asyncio.to_thread(spreadsheet.worksheets)
+        wdict = {ws.title: ws for ws in worksheets}
+        self._worksheets_cache[cache_key] = (now, wdict)
+        return wdict
+
     async def get_date_worksheet(self, target_date: datetime.date):
         """Finds worksheet matching the date (e.g. '10.03')"""
         spreadsheet = await self.get_spreadsheet()
@@ -63,9 +80,14 @@ class SeaPlanService:
             return None
         date_str = target_date.strftime("%d.%m")
         try:
-            return await asyncio.to_thread(spreadsheet.worksheet, date_str)
-        except gspread.WorksheetNotFound:
-            logger.warning(f"Worksheet {date_str} not found in Sea Plan.")
+            wdict = await self._get_cached_worksheets_dict(spreadsheet)
+            if date_str in wdict:
+                return wdict[date_str]
+            else:
+                logger.warning(f"Worksheet {date_str} not found in Sea Plan.")
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching worksheet {date_str}: {e}")
             return None
 
     async def _get_worksheet_values(self, target_date: datetime.date) -> List[List[str]]:
@@ -404,6 +426,17 @@ class SeaPlanService:
                 pu_time = col3
                 if ' ' in pu_time: pu_time = pu_time.split(' ')[0]
                 
+                prog_name = current_block.program
+                
+                # Smart time detection: if col3 is not a time, check col13
+                if not is_time_format(pu_time) and len(row) > 13:
+                    alt_time = row[13].strip()
+                    if is_time_format(alt_time):
+                        pu_time = alt_time
+                        # If col13 was time, then col3 might be the program name (common in PRIVATE)
+                        if not current_block.program or current_block.program == "Unknown/Joined":
+                             prog_name = col3
+                
                 pax_a_g, pax_c_g, pax_i_g = 0, 0, 0
                 try:
                     pax_a_g = int(row[9]) if row[9].isdigit() else 0
@@ -419,6 +452,8 @@ class SeaPlanService:
                     pax=f"{pax_a_g}/{pax_c_g}/{pax_i_g}",
                     is_me=is_me
                 ))
+                if prog_name and (not current_block.program or current_block.program == "Unknown/Joined"):
+                    current_block.program = prog_name
                 continue
 
             if 'Bus' in col3 or (col2 and 'Bus' in col2):
@@ -431,6 +466,12 @@ class SeaPlanService:
                 continue
 
             if col7 and col7.lower() not in all_guide_identifiers:
+                if col1.strip().upper() == "BTC" or "GUIDE" in col7.upper():
+                    # This is a Thai guide, add directly to block and skip guests list
+                    if current_block and not current_block.thai_guide:
+                        current_block.thai_guide = col7
+                    continue
+
                 try:
                     pax_a = int(row[9]) if row[9].isdigit() else 0
                     pax_c = int(row[10]) if row[10].isdigit() else 0
@@ -457,13 +498,10 @@ class SeaPlanService:
         if current_block:
             blocks.append(current_block)
 
-        # Calculate accumulated pax_string for each assigned block
+        # Calculate accumulated pax_string for each assigned block (Guides are EXCLUDED)
         assigned = [b for b in blocks if b.is_assigned]
         for b in assigned:
             a, c, i = 0, 0, 0
-            for g in b.guides:
-                parts = g.pax.split('/')
-                a += int(parts[0]); c += int(parts[1]); i += int(parts[2])
             for gst in b.guests:
                 parts = gst.pax.split('/')
                 a += int(parts[0]); c += int(parts[1]); i += int(parts[2])

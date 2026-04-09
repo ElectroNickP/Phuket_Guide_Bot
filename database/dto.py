@@ -36,6 +36,7 @@ class GuideDTO:
 class LandPlanDTO:
     program: str
     date: str
+    thai_guide: Optional[str] = None
     guides: List[GuideDTO] = field(default_factory=list)
     guests: List[GuestDTO] = field(default_factory=list)
     bus: Optional[str] = None

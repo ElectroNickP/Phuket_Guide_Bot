@@ -25,6 +25,8 @@ class GoogleSheetsService:
         self._current_spreadsheet_id = None
         self._all_values_cache = {} # {sheet_title: (timestamp, values)}
         self._merges_cache = {}     # {sheet_title: merges_list}
+        self._worksheets_cache = {} # {spreadsheet_id: (timestamp, list_of_worksheets)}
+        self._col_values_cache = {} # {cache_key: (timestamp, list)}
 
     async def get_spreadsheet_id(self):
         """Fetches spreadsheet ID from DB or config"""
@@ -67,8 +69,8 @@ class GoogleSheetsService:
         
         possible_names = [f"{month}.{year_short}", f"{month}/{year_short}"]
         
-        # Run blocking call in thread pool
-        all_sheets = await asyncio.to_thread(spreadsheet.worksheets)
+        # Use cached worksheets
+        all_sheets = await self._get_cached_worksheets(spreadsheet)
         for sheet in all_sheets:
             if sheet.title in possible_names:
                 return sheet
@@ -94,8 +96,8 @@ class GoogleSheetsService:
         - Staff end at "ВЫХОДНЫЕ"
         - Freelance start after "ФРИЛАНС"
         """
-        # Run blocking call in thread pool
-        col_a = await asyncio.to_thread(sheet.col_values, 1)
+        # Use cached column values to avoid API rate limits
+        col_a = await self._get_cached_col_values(sheet, 1)
 
         staff_guides = []
         freelance_guides = []
@@ -138,9 +140,35 @@ class GoogleSheetsService:
         logger.info(f"Parsed {len(staff_guides)} staff and {len(freelance_guides)} freelance guides")
         return staff_guides, freelance_guides
 
+    async def _get_cached_worksheets(self, spreadsheet):
+        cache_key = spreadsheet.id
+        now = get_phuket_now()
+        if cache_key in self._worksheets_cache:
+            ts, worksheets = self._worksheets_cache[cache_key]
+            if (now - ts).total_seconds() < 300: # 5 mins TTL
+                return worksheets
+        
+        logger.info(f"Fetching fresh worksheets list for {cache_key}")
+        worksheets = await asyncio.to_thread(spreadsheet.worksheets)
+        self._worksheets_cache[cache_key] = (now, worksheets)
+        return worksheets
+
+    async def _get_cached_col_values(self, sheet, col_index):
+        cache_key = f"{sheet.spreadsheet.id}_{sheet.title}_col_{col_index}"
+        now = get_phuket_now()
+        if cache_key in self._col_values_cache:
+            ts, values = self._col_values_cache[cache_key]
+            if (now - ts).total_seconds() < 300: # 5 mins TTL
+                return values
+        
+        logger.info(f"Fetching fresh column values for {cache_key}")
+        values = await asyncio.to_thread(sheet.col_values, col_index)
+        self._col_values_cache[cache_key] = (now, values)
+        return values
+
     async def _get_cached_values(self, sheet):
         cache_key = f"{sheet.spreadsheet.id}_{sheet.title}"
-        now = datetime.datetime.now()
+        now = get_phuket_now()
         if cache_key in self._all_values_cache:
             ts, values = self._all_values_cache[cache_key]
             if (now - ts).total_seconds() < 60:

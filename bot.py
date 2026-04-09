@@ -8,7 +8,7 @@ from aiogram.methods import SendMessage, EditMessageText, SendPhoto, SendDocumen
 from aiogram.methods.base import TelegramMethod
 from config import config
 from database.db import init_db
-from handlers import common, guide, admin, feedback, reports
+from handlers import common, guide, admin, feedback, reports, help
 from services.scheduler import setup_scheduler
 from utils.logging_middleware import LoggingMiddleware
 from loguru import logger
@@ -83,8 +83,27 @@ class MonitoringBot(Bot):
                 return result
 
             try:
-                # Resolve chat_id to name from cache
-                destination_name = self.user_info_cache.get(chat_id, str(chat_id))
+                # Resolve chat_id to name from cache or DB
+                destination_name = self.user_info_cache.get(chat_id)
+                if not destination_name:
+                    try:
+                        from database.db import AsyncSessionLocal
+                        from database.models import User
+                        from sqlalchemy import select
+                        async with AsyncSessionLocal() as session:
+                            stmt = select(User).where(User.telegram_id == chat_id)
+                            result = await session.execute(stmt)
+                            db_user = result.scalar_one_or_none()
+                            if db_user and db_user.username:
+                                destination_name = f"@{db_user.username}"
+                            elif db_user and db_user.full_name:
+                                destination_name = db_user.full_name
+                            else:
+                                destination_name = str(chat_id)
+                        self.user_info_cache[chat_id] = destination_name
+                    except Exception as e:
+                        logger.error(f"Error fetching user {chat_id} from DB: {e}")
+                        destination_name = str(chat_id)
                 
                 # Prepare log text
                 text_content = ""
@@ -140,6 +159,7 @@ async def main():
     dp.include_router(feedback.router)
     dp.include_router(guide.router)
     dp.include_router(reports.router)
+    dp.include_router(help.router)
 
     # Start Polling
     logger.info("Bot started and polling...")

@@ -5,10 +5,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database.db import AsyncSessionLocal
-from database.models import User, AppSettings, UserRole
+from database.models import User, AppSettings, UserRole, WakeUpConfirmation, ReportSubmission
 from utils.permissions import RoleFilter
 from services.google_sheets import google_sheets
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func, desc
 from loguru import logger
 from config import config
 import re
@@ -23,8 +23,8 @@ from utils.keyboards import get_job_order_date_keyboard, get_general_schedule_da
 # List of all reply keyboard buttons to prevent state hijacking
 MENU_BUTTONS = [
     "📅 Моё расписание", "🌊 План на море", "🚐 План на суше", "👤 Мой статус", "📝 Обратная связь",
-    "👁 Мониторинг гидов", "🌊 Мониторинга моря", "🚐 Мониторинг суши", "📊 Статистика", "🔍 Тест-Аудит", 
-    "📋 Job Order", "📅 Общее расписание",
+    "👁 Мониторинг гидов", "👁 Контроль Смены", "🌊 Мониторинга моря", "🚐 Мониторинг суши", "📊 Статистика", "🔍 Тест-Аудит", 
+    "📋 Job Order", "📅 Общее расписание", "🔍 Тест Пробуждения", "🆘 Тест SOS",
     "⏱ Интервал", "📋 Логи", "🔗 Сменить таблицу", "🔗 Сменить таблицу (Море)", "🔙 Главное меню"
 ]
 
@@ -96,6 +96,7 @@ class AdminStates(StatesGroup):
     waiting_for_land_monitor_username = State()
     waiting_for_guide_name_sea = State()
     waiting_for_job_order_guide = State()
+    waiting_for_wakeup_test_username = State()
 
 @router.message(F.text == "🔗 Сменить таблицу", RoleFilter(SYSTEM_ADMIN))
 async def cmd_set_sheet_kb(message: types.Message, state: FSMContext):
@@ -190,6 +191,7 @@ async def cmd_logs_kb(message: types.Message):
 
 class AdminReportStates(StatesGroup):
     waiting_for_username = State()
+    waiting_for_report_type = State()
 
 @router.message(F.text == "📝 Отчет за гида", RoleFilter(ADMIN_MANAGEMENT))
 async def cmd_admin_report_proxy(message: types.Message, state: FSMContext):
@@ -197,39 +199,58 @@ async def cmd_admin_report_proxy(message: types.Message, state: FSMContext):
     await state.set_state(AdminReportStates.waiting_for_username)
 
 @router.message(AdminReportStates.waiting_for_username)
-async def process_admin_report_username(message: types.Message, state: FSMContext, **data):
+async def process_admin_report_username(message: types.Message, state: FSMContext):
     username = message.text.strip().replace("@", "")
     await state.update_data(proxy_username=username)
     
-    # We trigger the same start_report flow but with proxy_username in data
-    # Bypass date selection, default to Today
-    from handlers.guide import _initiate_report_filling, get_phuket_now
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚀 Начать программу", callback_data="admin_report_type_start")
+    builder.button(text="🏁 Завершить программу", callback_data="admin_report_type_finish")
+    builder.adjust(1)
     
+    await message.answer(
+        f"👤 Вы сдаете отчет за <b>@{username}</b>.\nВыберите тип отчета:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(AdminReportStates.waiting_for_report_type)
+
+@router.callback_query(F.data.startswith("admin_report_type_"), AdminReportStates.waiting_for_report_type)
+async def process_admin_report_type_select(callback: types.CallbackQuery, state: FSMContext, **data):
+    rtype = callback.data.replace("admin_report_type_", "")
+    is_end = (rtype == "finish")
+    await state.update_data(is_end_report=is_end)
+    
+    await callback.message.edit_reply_markup(reply_markup=None)
+    
+    from handlers.guide import _initiate_report_filling, get_phuket_now
     target_date = get_phuket_now().date()
-    await message.answer(f"👤 Вы сдаете отчет за <b>@{username}</b>.", parse_mode="HTML")
-    await _initiate_report_filling(message, state, target_date, **data)
+    
+    await callback.message.answer(f"📝 Выбран тип: {'Завершение' if is_end else 'Начало'} программы.")
+    await _initiate_report_filling(callback.message, state, target_date, **data)
+    await callback.answer()
 
 @router.message(F.text == "👁 Мониторинг гидов", RoleFilter(ADMIN_ALL))
 async def cmd_monitor_guides(message: types.Message, state: FSMContext):
     await _cmd_monitor_guides_base(message)
 
-async def _cmd_monitor_guides_base(message: types.Message, is_callback: bool = False):
-    if is_callback:
-        await message.edit_text("🔍 Загружаю список всех гидов...")
-    else:
-        await message.answer("🔍 Загружаю список всех гидов...")
+@router.callback_query(F.data == "mon_v2_main")
+async def process_monitor_main(callback: types.CallbackQuery):
+    await _cmd_monitor_guides_base(callback.message)
+    await callback.answer()
+
+async def _cmd_monitor_guides_base(message: types.Message):
+    await message.edit_text("🔍 Загружаю список всех гидов...") if hasattr(message, 'edit_text') and message.reply_markup else None
     
     sheet = await google_sheets.get_current_month_sheet()
     if not sheet:
-        if is_callback: await message.edit_text("❌ Не удалось найти лист с расписанием.")
-        else: await message.answer("❌ Не удалось найти лист с расписанием.")
+        await message.answer("❌ Не удалось найти лист с расписанием.")
         return
 
     staff, freelance = await google_sheets.parse_guides(sheet)
     
     if not staff and not freelance:
-        if is_callback: await message.edit_text("❌ Гиды не найдены в таблице.")
-        else: await message.answer("❌ Гиды не найдены в таблице.")
+        await message.answer("❌ Гиды не найдены в таблице.")
         return
 
     builder = InlineKeyboardBuilder()
@@ -237,19 +258,13 @@ async def _cmd_monitor_guides_base(message: types.Message, is_callback: bool = F
     builder.row(types.InlineKeyboardButton(text="🌍 Фрилансеры", callback_data="mon_v2_list_freelance"))
     builder.row(types.InlineKeyboardButton(text="📊 Показать всё расписание", callback_data="mon_v2_all"))
     
-    text = (f"👥 <b>Мониторинг гидов</b>\n"
-            f"Штат: {len(staff)}, Фриланс: {len(freelance)}\n\n"
-            "Выберите категорию или посмотрите общее расписание:")
-            
-    if is_callback:
-        await message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
-    else:
-        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
-
-@router.callback_query(F.data == "mon_v2_main")
-async def process_monitor_main(callback: types.CallbackQuery):
-    await _cmd_monitor_guides_base(callback.message, is_callback=True)
-    await callback.answer()
+    await message.answer(
+        f"👥 <b>Мониторинг гидов</b>\n"
+        f"Штат: {len(staff)}, Фриланс: {len(freelance)}\n\n"
+        "Выберите категорию или посмотрите общее расписание:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
 
 @router.callback_query(F.data.startswith("mon_v2_list_"))
 async def process_admin_monitor_type(callback: types.CallbackQuery):
@@ -285,17 +300,48 @@ async def process_admin_monitor_user_v2(callback: types.CallbackQuery):
     username = callback.data.split("_", 3)[3]
     await callback.answer(f"Загружаю @{username}...")
     
-    data = await google_sheets.get_guide_4day_data(username)
+    now = get_phuket_now().date()
+    dates = [
+        ("⏮ Вчера", now - datetime.timedelta(days=1)),
+        ("📅 Сегодня", now),
+        ("📅 Завтра", now + datetime.timedelta(days=1)),
+        ("⏭ Послезавтра", now + datetime.timedelta(days=2))
+    ]
     
-    response = f"👁 <b>Архив/Мониторинг: @{username}</b>\n\n"
-    for item in data:
-        response += f"{item['label']} ({item['date'].strftime('%d.%m')}): <b>{item['sched']}</b>\n"
+    # 1. First find guide row in current month sheet
+    current_sheet = await google_sheets.get_current_month_sheet()
+    staff, freelance = await google_sheets.parse_guides(current_sheet)
+    all_current = staff + freelance
+    guide_info = next((g for g in all_current if g['username'].lower() == username.lower()), None)
+    
+    if not guide_info:
+        await callback.message.answer(f"❌ Гид @{username} не найден в текущем месяце.")
+        return
 
-    # Add a back button
-    builder = InlineKeyboardBuilder()
-    builder.button(text="⬅️ Назад", callback_data="mon_v2_main")
+    response = f"👁 <b>Архив/Мониторинг: @{username}</b>\n\n"
     
-    await callback.message.answer(response, parse_mode="HTML", reply_markup=builder.as_markup())
+    for label, target_date in dates:
+        sheet = await google_sheets.get_sheet_by_date(target_date)
+        if not sheet:
+            response += f"{label} ({target_date.strftime('%d.%m')}): ❌ Лист не найден\n"
+            continue
+            
+        # If it's a different month, we might need to find the guide's row in that sheet
+        row_idx = guide_info['row']
+        if sheet.title != current_sheet.title:
+            s, f = await google_sheets.parse_guides(sheet)
+            all_target = s + f
+            target_guide = next((g for g in all_target if g['username'].lower() == username.lower()), None)
+            if target_guide:
+                row_idx = target_guide['row']
+            else:
+                response += f"{label} ({target_date.strftime('%d.%m')}): ❌ Не найден в листе {sheet.title}\n"
+                continue
+
+        sched = await google_sheets.get_guide_schedule(sheet, row_idx, target_date)
+        response += f"{label} ({target_date.strftime('%d.%m')}): <b>{sched or '---'}</b>\n"
+
+    await callback.message.answer(response, parse_mode="HTML")
 
 @router.callback_query(F.data == "mon_v2_all")
 async def process_admin_monitor_all_v2(callback: types.CallbackQuery):
@@ -430,6 +476,23 @@ async def _send_admin_sea_plans_single(target_username: str, date: datetime.date
                     if len(plan.guides) > 1 and prog.short_guide:
                         prog_text += f" - {prog.short_guide}"
                     day_response += f"  • {prog_text}\n"
+                
+                # Fetch guests to calculate COT
+                prog_names = [p.name for p in plan.programs]
+                guests = await sea_plan_service.get_guest_list(date, prog_names)
+                cot_info = "---"
+                if guests:
+                    cots = []
+                    for g in guests:
+                        try:
+                            cot_val = str(g.cot).strip()
+                            if cot_val and cot_val != "0" and cot_val != "-":
+                                cots.append(f"{cot_val} ({g.name})")
+                        except: continue
+                    if cots:
+                        cot_info = "\n" + "\n".join(cots)
+                
+                day_response += f"💵 <b>COT:</b> {cot_info}\n"
                 day_response += f"📊 <b>GRAND TOTAL:</b> {plan.total_pax}\n"
             
             builder = InlineKeyboardBuilder()
@@ -615,6 +678,183 @@ async def process_guide_monitor_land(message: types.Message, state: FSMContext):
         builder.button(text="Завтра", callback_data=f"admin_land_tomorrow_{username}")
         builder.adjust(2)
         await message.answer(f"🚐 Выберите дату для @{username}:", reply_markup=builder.as_markup())
+
+@router.message(F.text == "🔍 Тест Пробуждения", RoleFilter(ADMIN_ALL))
+async def cmd_wakeup_test(message: types.Message, state: FSMContext):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📅 Сегодня", callback_data="wutest_date_today")
+    builder.button(text="📅 Завтра", callback_data="wutest_date_tomorrow")
+    builder.adjust(2)
+    
+    await message.answer(
+        "⏰ <b>Тест Системы Пробуждения</b>\n\nВыберите дату для проверки:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+    await state.clear()
+
+@router.callback_query(F.data.startswith("wutest_date_"))
+async def process_wakeup_test_date(callback: types.CallbackQuery, state: FSMContext):
+    is_today = "today" in callback.data
+    target_date = get_phuket_today() if is_today else get_phuket_today() + datetime.timedelta(days=1)
+    date_str = target_date.strftime("%d.%m")
+    
+    await callback.answer(f"Ищу гидов на {date_str}...")
+    active_guides = await sea_plan_service.get_active_land_guides([target_date])
+    
+    if active_guides:
+        builder = InlineKeyboardBuilder()
+        for uname in active_guides:
+            builder.button(text=f"👤 @{uname}", callback_data=f"wutest_user_{date_str}_{uname}")
+        builder.adjust(2)
+        await callback.message.edit_text(
+            f"⏰ <b>Гиды на суше ({date_str}):</b>\n"
+            "Выберите гида для теста пробуждения:",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup()
+        )
+    else:
+        await callback.message.edit_text(
+            f"⏰ На {date_str} гидов на суше не найдено."
+        )
+
+@router.callback_query(F.data.startswith("wutest_user_"))
+async def process_wakeup_test_user(callback: types.CallbackQuery):
+    # Format: wutest_user_{date_str}_{uname}
+    parts = callback.data.split("_", 3)
+    date_str = parts[2]
+    username = parts[3]
+    
+    target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
+    
+    await callback.answer(f"Расчет для @{username}...")
+    
+    plans = await sea_plan_service.get_guide_land_plan(username, target_date)
+    if not plans:
+        await callback.message.answer(f"❌ План для @{username} на {date_str} не найден.")
+        return
+
+    plan = plans[0]
+    guide_info = next((g for g in plan.guides if g.is_me), None)
+    if not guide_info or not guide_info.pickup_time:
+        await callback.message.answer(f"❌ Время пикапа для @{username} не найдено в плане.")
+        return
+
+    p_time_str = guide_info.pickup_time.strip()
+    try:
+        h, m = map(int, p_time_str.split(':'))
+        # Using Phuket day to avoid tomorrow-past-midnight issues
+        pickup_dt = datetime.datetime.combine(target_date, datetime.time(h, m))
+        wake_up_dt = pickup_dt - datetime.timedelta(hours=1)
+    except Exception as e:
+        await callback.message.answer(f"❌ Некорректный формат времени в плане: {p_time_str} ({e})")
+        return
+
+    # Check status in DB if today
+    status_text = "N/A (Будущая дата)"
+    if target_date == get_phuket_today():
+        date_norm = datetime.datetime.combine(target_date, datetime.time.min)
+        async with AsyncSessionLocal() as session:
+            from database.models import WakeUpConfirmation
+            q = select(WakeUpConfirmation).where(
+                WakeUpConfirmation.guide_username == username,
+                WakeUpConfirmation.date == date_norm,
+                WakeUpConfirmation.pickup_time == p_time_str
+            )
+            res = await session.execute(q)
+            conf = res.scalar_one_or_none()
+            if conf:
+                status_text = f"<b>{conf.status.upper()}</b> (отправлено в {conf.sent_at.strftime('%H:%M')})"
+            else:
+                status_text = "Ожидает отправки"
+
+    info = (
+        f"⏰ <b>Детали Пробуждения: @{username}</b>\n"
+        f"📅 Дата: {date_str}\n"
+        f"🏝 Программа: {plan.program}\n\n"
+        f"🚐 Пикап: <b>{p_time_str}</b>\n"
+        f"🔔 Подъем: <b>{wake_up_dt.strftime('%H:%M')}</b>\n"
+        f"📊 Статус: {status_text}"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👁 Предпросмотр текста", callback_data=f"wutest_action_preview_{date_str}_{username}")
+    builder.button(text="📲 Тестовое мне", callback_data=f"wutest_action_send_{date_str}_{username}")
+    builder.row(types.InlineKeyboardButton(text="⬅️ Назад к списку", callback_data=f"wutest_date_{'today' if target_date == get_phuket_today() else 'tomorrow'}"))
+    builder.adjust(1)
+
+    await callback.message.answer(info, parse_mode="HTML", reply_markup=builder.as_markup())
+
+@router.callback_query(F.data.startswith("wutest_action_"))
+async def process_wakeup_test_action(callback: types.CallbackQuery, bot: Bot):
+    # Format: wutest_action_{type}_{date_str}_{username}
+    parts = callback.data.split("_", 4)
+    action_type = parts[2]
+    date_str = parts[3]
+    username = parts[4]
+    
+    target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
+    plans = await sea_plan_service.get_guide_land_plan(username, target_date)
+    if not plans:
+        await callback.answer("❌ План не найден.")
+        return
+    plan = plans[0]
+    guide_info = next((g for g in plan.guides if g.is_me), None)
+    if not guide_info or not guide_info.pickup_time:
+        await callback.answer("❌ Информация не найдена.")
+        return
+
+    p_time_str = guide_info.pickup_time.strip()
+
+    from services.scheduler import get_wakeup_message_data
+    text, reply_markup = get_wakeup_message_data(username, p_time_str, plan.program, guide_info.pickup_location)
+
+    if action_type == "preview":
+        # Create a visually distinct preview
+        preview_text = f"📝 <b>ПРЕДПРОСМОТР СООБЩЕНИЯ:</b>\n\n{text}"
+        await callback.message.answer(preview_text, parse_mode="HTML")
+        await callback.answer("Предпросмотр показан")
+    elif action_type == "send":
+        # Create/Update record so interactive buttons work during test
+        async with AsyncSessionLocal() as session:
+            # We save it for the target guide and TODAY,
+            # so the button handlers in guide.py can find it using the username in the callback.
+            today_norm = datetime.datetime.combine(get_phuket_now().date(), datetime.time.min)
+            
+            # Use a MERGE-like approach: look for existing or create new
+            q = select(WakeUpConfirmation).where(
+                WakeUpConfirmation.guide_username == username,
+                WakeUpConfirmation.date == today_norm,
+                WakeUpConfirmation.pickup_time == p_time_str
+            )
+            res = await session.execute(q)
+            conf = res.scalar_one_or_none()
+            
+            if not conf:
+                conf = WakeUpConfirmation(
+                    guide_username=username,
+                    date=today_norm,
+                    pickup_time=p_time_str,
+                    program_name=plan.program,
+                    status="pending",
+                    sent_at=get_phuket_now()
+                )
+                session.add(conf)
+            else:
+                conf.program_name = plan.program
+                conf.sent_at = get_phuket_now()
+                conf.status = "pending" # Reset status for new test
+            
+            await session.commit()
+
+        await callback.message.answer("📲 <b>Отправляю тестовое сообщение тебе...</b>", parse_mode="HTML")
+        await bot.send_message(
+            callback.from_user.id,
+            f"🧪 <b>TEST Wake-up for @{username}</b>\n\n{text}",
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+        await callback.answer("Сообщение отправлено")
 
 @router.message(F.text == "📋 Job Order", RoleFilter(ADMIN_MANAGEMENT))
 async def cmd_job_order_menu(message: types.Message):
@@ -808,8 +1048,10 @@ async def _send_admin_land_plans(username: str, target_date: datetime.date, plan
             f"🚐 <b>ADMIN VIEW: @{username}</b>\n"
             f"📅 <b>Date:</b> {plan.date}\n"
             f"🏝️ <b>Program:</b> {plan.program}\n"
-            f"🪑 <b>Total PAX:</b> {plan.pax_string}\n"
         )
+        if getattr(plan, 'thai_guide', None):
+            response += f"👤 <b>Thai guide:</b> {plan.thai_guide}\n"
+        response += f"🪑 <b>Total PAX:</b> {plan.pax_string}\n"
         
         if plan.guides:
             guide_infos = []
@@ -835,48 +1077,144 @@ async def _send_admin_land_plans(username: str, target_date: datetime.date, plan
 @router.message(F.text == "📊 Статистика", RoleFilter(ADMIN_ALL))
 async def cmd_stats_kb(message: types.Message):
     async with AsyncSessionLocal() as session:
-        # Get all users
-        query_total = select(User)
-        result_total = await session.execute(query_total)
-        users = result_total.scalars().all()
+        # 1. Overall User Stats
+        query_total = select(func.count(User.id))
+        res_total = await session.execute(query_total)
+        total_users = res_total.scalar()
         
-        # Get interval from DB or config
+        # ACTIVE in last 24h
+        day_ago = get_phuket_now() - datetime.timedelta(days=1)
+        query_active = select(func.count(User.id)).where(User.last_contact >= day_ago)
+        res_active = await session.execute(query_active)
+        active_24h = res_active.scalar()
+        
+        # 2. Today's Reports Summary
+        today_start = datetime.datetime.combine(get_phuket_today(), datetime.time.min)
+        query_reports = select(ReportSubmission.report_type, func.count(ReportSubmission.id))\
+            .where(ReportSubmission.date >= today_start)\
+            .group_by(ReportSubmission.report_type)
+        res_reports = await session.execute(query_reports)
+        reports_summary = {r[0]: r[1] for r in res_reports.all()}
+        
+        starts = reports_summary.get("start", 0)
+        finishes = reports_summary.get("finish", 0)
+        
+        # 3. Get detailed user list (Top 15 by last contact)
+        query_users = select(User).order_by(desc(User.last_contact)).limit(15)
+        result_users = await session.execute(query_users)
+        users = result_users.scalars().all()
+        
+        # Get polling interval
         query_int = select(AppSettings).where(AppSettings.key == "polling_interval")
         res_int = await session.execute(query_int)
         setting_int = res_int.scalar_one_or_none()
         current_interval = int(setting_int.value) if setting_int else config.POLLING_INTERVAL
         
-        # Sort users by activity: sum of all counters
-        users_sorted = sorted(
-            users, 
-            key=lambda u: (u.count_today or 0) + (u.count_tomorrow or 0) + (u.count_sea_today or 0) + (u.count_sea_tomorrow or 0) + (u.count_feedback or 0) + (u.count_status or 0) + (u.count_start or 0),
-            reverse=True
-        )
-        
         user_list_str = ""
-        for u in users_sorted:
+        for u in users:
             last_contact_str = u.last_contact.strftime("%d.%m %H:%M") if u.last_contact else "---"
-            total_act = (u.count_today or 0) + (u.count_tomorrow or 0) + (u.count_sea_today or 0) + (u.count_sea_tomorrow or 0) + (u.count_feedback or 0) + (u.count_status or 0) + (u.count_start or 0)
+            last_act = u.last_action or "---"
+            if len(last_act) > 30: last_act = last_act[:27] + "..."
+            
+            # Simple activity indicator - compare as naive datetimes
+            phuket_now_naive = get_phuket_now().replace(tzinfo=None)
+            status_icon = "🟢" if u.last_contact and u.last_contact >= (phuket_now_naive - datetime.timedelta(minutes=30)) else "⚪️"
             
             user_list_str += (
-                f"👤 @{u.username or 'no_user'}\n"
-                f"  🕒 Активен: {last_contact_str}\n"
-                f"  📊 Всего: {total_act}\n"
-                f"  (📅 {u.count_today}/{u.count_tomorrow} | 🌊 {u.count_sea_today}/{u.count_sea_tomorrow} | 📝 {u.count_feedback} | 👤 {u.count_status})\n\n"
+                f"{status_icon} <b>@{u.username or u.telegram_id}</b>\n"
+                f"  🕒 {last_contact_str} | ⚙️ <code>{html.escape(last_act)}</code>\n"
+                f"  📈 Reps: 🚀{u.count_start or 0} | 🏁{u.count_finish or 0} | 👤{u.count_status or 0}\n\n"
             )
-            
+
     response = (
-        f"📊 <b>Детальная статистика</b>\n"
-        f"⏱ Опрос: {current_interval // 60} мин.\n"
-        f"👥 Всего: {len(users)}\n\n"
-        f"{user_list_str if user_list_str else 'Пользователей пока нет.'}"
+        f"📊 <b>СИСТЕМНАЯ СТАТИСТИКА</b>\n\n"
+        f"👥 Всего пользователей: <b>{total_users}</b>\n"
+        f"🔥 Активны (24ч): <b>{active_24h}</b>\n"
+        f"⏱ Опрос таблицы: <b>{current_interval // 60} мин.</b>\n\n"
+        f"📅 <b>ОТЧЕТЫ СЕГОДНЯ:</b>\n"
+        f"🚀 Начали: <b>{starts}</b>\n"
+        f"🏁 Завершили: <b>{finishes}</b>\n\n"
+        f"🕒 <b>ПОСЛЕДНЯЯ АКТИВНОСТЬ (TOP 15):</b>\n\n"
+        f"{user_list_str if user_list_str else 'Данных нет.'}"
     )
     
-    # Telegram has a limit of 4096 characters per message
-    if len(response) > 4000:
-        response = response[:3900] + "... (список слишком длинный)"
-        
     await message.answer(response, parse_mode="HTML")
+
+@router.message(F.text == "👁 Контроль Смены", RoleFilter(ADMIN_ALL))
+async def cmd_shift_control(message: types.Message):
+    await message.answer("🔍 Собираю данные по текущей смене...")
+    
+    today = get_phuket_today()
+    
+    # 1. Get all scheduled guides
+    sea_guides = await sea_plan_service.get_active_sea_guides([today])
+    land_guides = await sea_plan_service.get_active_land_guides([today])
+    all_scheduled = list(set(sea_guides + land_guides))
+    
+    async with AsyncSessionLocal() as session:
+        # 2. Get today's reports
+        today_start = datetime.datetime.combine(today, datetime.time.min)
+        q_reports = select(ReportSubmission).where(ReportSubmission.date >= today_start)
+        res_reports = await session.execute(q_reports)
+        reports = res_reports.scalars().all()
+        
+        # Mapping: username -> {start: bool, finish: bool}
+        report_map = {}
+        for r in reports:
+            uname = r.guide_username.lower()
+            if uname not in report_map: report_map[uname] = {"start": False, "finish": False}
+            if r.report_type == "start": report_map[uname]["start"] = True
+            if r.report_type == "finish": report_map[uname]["finish"] = True
+            
+        # 3. Get wake-up confirmations
+        q_wakeup = select(WakeUpConfirmation).where(WakeUpConfirmation.date == today_start)
+        res_wakeup = await session.execute(q_wakeup)
+        wakeups = res_wakeup.scalars().all()
+        wakeup_map = {w.guide_username.lower(): w.status for w in wakeups}
+        
+        # 4. Get registered users to find missing ones
+        q_users = select(User.username)
+        res_users = await session.execute(q_users)
+        registered_usernames = [u.lower() for u in res_users.scalars().all() if u]
+
+    # 5. Build response
+    response = f"👁 <b>КОНТРОЛЬ СМЕНЫ ({today.strftime('%d.%m')})</b>\n\n"
+    
+    if not all_scheduled:
+        response += "🏝 Сегодня нет запланированных гидов."
+    else:
+        # Group by status for better overview
+        lines = []
+        for uname in sorted(all_scheduled):
+            ulower = uname.lower()
+            
+            # Icons
+            reg_icon = "👤" if ulower in registered_usernames else "❓"
+            
+            wu_status = wakeup_map.get(ulower, "pending")
+            wu_icon = "⏰✅" if wu_status == "confirmed" else "⏰⚠️" if wu_status == "problem" else "⏰⌛️"
+            
+            reps = report_map.get(ulower, {"start": False, "finish": False})
+            st_icon = "🚀✅" if reps["start"] else "🚀❌"
+            fn_icon = "🏁✅" if reps["finish"] else "🏁❌"
+            
+            lines.append(f"{reg_icon} @{uname}\n   {wu_icon} | {st_icon} | {fn_icon}")
+
+        response += "\n\n".join(lines)
+        
+    # Legend
+    response += (
+        "\n\n---\n"
+        "💡 <b>Легенда:</b>\n"
+        "⏰: Пробуждение (⌛️-жду, ✅-ок, ⚠️-проблема)\n"
+        "🚀: Старт программы, 🏁: Финиш программы\n"
+        "❓: Гид НЕ зарегистрирован в боте!"
+    )
+    
+    if len(response) > 4000:
+        await send_long_message(message, response)
+    else:
+        await message.answer(response, parse_mode="HTML")
 
 @router.message(F.text == "⏱ Интервал", RoleFilter(SYSTEM_ADMIN))
 async def cmd_set_interval_kb(message: types.Message):
@@ -978,7 +1316,8 @@ async def process_guest_list_admin(callback: types.CallbackQuery):
             response += f"    💵 <b>COT:</b> <code>{g.cot}</code>\n"
             response += "\n"
     
-    await callback.message.answer(response, parse_mode="HTML")
+    from utils.message_utils import send_long_message
+    await send_long_message(callback.message, response, parse_mode="HTML")
 
 @router.message(F.text == "🔍 Тест-Аудит", RoleFilter(ADMIN_MANAGEMENT))
 async def cmd_run_audit(message: types.Message):
@@ -1251,3 +1590,68 @@ async def process_impersonate_role(callback: types.CallbackQuery, state: FSMCont
         await callback.message.edit_text(f"✅ Теперь вы имитируете РОЛЬ: {role}.\nИспользуйте /start для обновления интерфейса.")
     else:
         await callback.answer("Ошибка: Redis недоступен", show_alert=True)
+
+# ─── SOS Test ─────────────────────────────────────────────────────────────
+
+@router.message(F.text == "🆘 Тест SOS", RoleFilter(ADMIN_ALL))
+async def cmd_sos_test(message: types.Message, state: FSMContext):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📅 Сегодня", callback_data="sostest_date_today")
+    builder.button(text="📅 Завтра", callback_data="sostest_date_tomorrow")
+    builder.adjust(2)
+    
+    await message.answer(
+        "🆘 <b>Тест Системы SOS</b>\n\nВыберите дату для проверки:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+    await state.clear()
+
+@router.callback_query(F.data.startswith("sostest_date_"))
+async def process_sos_test_date(callback: types.CallbackQuery, state: FSMContext):
+    is_today = "today" in callback.data
+    target_date = get_phuket_today() if is_today else get_phuket_today() + datetime.timedelta(days=1)
+    date_str = target_date.strftime("%d.%m")
+    
+    await callback.answer(f"Ищу всех активных гидов на {date_str}...")
+    
+    # Get both sea and land guides
+    sea_guides = await sea_plan_service.get_active_sea_guides([target_date])
+    land_guides = await sea_plan_service.get_active_land_guides([target_date])
+    active_guides = sorted(list(set(sea_guides + land_guides)))
+    
+    if active_guides:
+        builder = InlineKeyboardBuilder()
+        for uname in active_guides:
+            builder.button(text=f"👤 @{uname}", callback_data=f"sostest_user_{date_str}_{uname}")
+        builder.adjust(2)
+        await callback.message.edit_text(
+            f"🆘 <b>Активные гиды ({date_str}):</b>\n"
+            "Выберите гида для имитации SOS-запроса:",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup()
+        )
+    else:
+        await callback.message.edit_text(
+            f"🆘 На {date_str} активных гидов не найдено."
+        )
+
+@router.callback_query(F.data.startswith("sostest_user_"))
+async def process_sos_test_user(callback: types.CallbackQuery, state: FSMContext):
+    # Format: sostest_user_{date_str}_{uname}
+    parts = callback.data.split("_", 3)
+    # date_str = parts[2]
+    username = parts[3]
+    
+    await callback.answer(f"Запуск теста от лица @{username}...")
+    
+    # Set proxy data in state
+    await state.update_data(
+        proxy_username=username,
+        is_test=True
+    )
+    
+    # Trigger the help flow
+    from handlers.help import cmd_help
+    # Important: we need to pass the message object to cmd_help
+    await cmd_help(callback.message, state)

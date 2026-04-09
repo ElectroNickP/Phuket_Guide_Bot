@@ -9,3 +9,4 @@ apscheduler
 loguru
 redis>=5.0.0
 pillow
+deep-translator

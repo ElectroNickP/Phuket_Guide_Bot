@@ -21,6 +21,27 @@ async def cmd_feedback(message: types.Message, state: FSMContext):
 @router.message(FeedbackState.waiting_for_feedback)
 async def process_feedback(message: types.Message, state: FSMContext, bot: Bot, **data):
     """Process and forward feedback to admin"""
+    # 🛡 Safeguard: if user clicks a menu button or types a command, cancel feedback
+    MENU_BUTTONS = [
+        "📅 Моё расписание", "🌊 План на море", "🚐 План на суше", "👤 Мой статус",
+        "🚀 Начать программу", "🏁 Завершить программу", "📝 Обратная связь",
+        "🆘 Нужна помощь", "📚 Библиотека гида", "🔙 Главное меню",
+        "👁 Мониторинг гидов", "👁 Контроль Смены", "🌊 Мониторинг моря",
+        "🚐 Мониторинг суши", "📊 Статистика", "🔍 Тест-Аудит",
+        "📋 Job Order", "📅 Общее расписание", "📝 Отчет за гида",
+        "🔍 Тест Пробуждения", "🆘 Тест SOS", "⏱ Интервал", "📋 Логи",
+        "🔗 Сменить таблицу", "🔗 Сменить таблицу (Море)"
+    ]
+    
+    if message.text in MENU_BUTTONS or (message.text and message.text.startswith("/")):
+        await state.clear()
+        await message.answer(
+            f"⚠️ <b>Отправка обратной связи отменена.</b>\n\n"
+            f"Пожалуйста, нажмите кнопку «{message.text}» ещё раз, чтобы выполнить команду.",
+            parse_mode="HTML"
+        )
+        return
+
     # Impersonation Check (Tester Mode)
     imp_user = data.get("impersonated_user")
     

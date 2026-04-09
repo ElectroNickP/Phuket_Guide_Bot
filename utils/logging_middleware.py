@@ -75,6 +75,20 @@ class LoggingMiddleware(BaseMiddleware):
             except Exception as e:
                 logger.error(f"Error sending to log channel: {e}")
 
+        # Update User activity in DB
+        try:
+            from database.db import update_user_activity
+            raw_action = None
+            if isinstance(event, Message):
+                raw_action = event.text or f"[{event.content_type}]"
+            elif isinstance(event, CallbackQuery):
+                raw_action = f"CB:{event.data}"
+            
+            # We don't increment any specific counter here, just last_contact + last_action
+            await update_user_activity(user.id, last_action=raw_action)
+        except Exception as e:
+            logger.error(f"Error updating activity in middleware: {e}")
+
         try:
             result = await handler(event, data)
             elapsed = (time.monotonic() - start_time) * 1000

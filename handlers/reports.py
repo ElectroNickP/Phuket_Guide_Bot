@@ -17,7 +17,7 @@ async def cmd_check_reports(message: types.Message):
     if message.chat.id != config.REPORT_GROUP_ID:
         return # Silent ignore if not in group
         
-    if message.message_thread_id != config.REPORT_TOPIC_ID:
+    if message.message_thread_id not in [config.REPORT_START_TOPIC_ID, config.REPORT_FINISH_TOPIC_ID]:
         # Optional: could respond, but user specifically asked for "in this topic"
         return
 
@@ -32,7 +32,8 @@ async def cmd_check_reports(message: types.Message):
 
         # 2. Get submitted reports from DB
         # We look for submissions today (timestamp >= start of day)
-        start_of_day = datetime.combine(today, datetime.min.time())
+        from utils.time import PHUKET_TZ
+        start_of_day = datetime.combine(today, datetime.min.time()).replace(tzinfo=PHUKET_TZ)
         
         async with AsyncSessionLocal() as session:
             query = select(ReportSubmission).where(
@@ -41,11 +42,15 @@ async def cmd_check_reports(message: types.Message):
             result = await session.execute(query)
             submissions = result.scalars().all()
             
-        submitted_data = {} # (username, program_name_lower) -> status
+        submitted_data = {} # (username, program_name_lower) -> {"start": status, "finish": status}
         for s in submissions:
             uname = s.guide_username.lower()
             prog_lower = s.program_name.lower()
-            submitted_data[(uname, prog_lower)] = s.status
+            rtype = s.report_type or "start" # Handle legacy
+            
+            if (uname, prog_lower) not in submitted_data:
+                submitted_data[(uname, prog_lower)] = {}
+            submitted_data[(uname, prog_lower)][rtype] = s.status
 
         # 3. Correlate and Group
         sea_lines = []
@@ -58,19 +63,24 @@ async def cmd_check_reports(message: types.Message):
             prog_lower = prog.lower()
             key = (uname, prog_lower)
             
-            if key in submitted_data:
-                status = submitted_data[key]
-                status_icon = "✅" if status == "ok" else "⚠️"
-            else:
-                status_icon = "❌"
+            start_icon = "❌"
+            finish_icon = "❌"
             
-            line = f"{status_icon} @{uname} — <i>{prog}</i>"
+            if key in submitted_data:
+                statuses = submitted_data[key]
+                if "start" in statuses:
+                    start_icon = "🚀✅" if statuses["start"] == "ok" else "🚀⚠️"
+                if "finish" in statuses:
+                    finish_icon = "🏁✅" if statuses["finish"] == "ok" else "🏁⚠️"
+            
+            line = f"{start_icon}{finish_icon} @{uname} — <i>{prog}</i>"
             if category == "SEA":
                 sea_lines.append(line)
             else:
                 land_lines.append(line)
 
         response = f"📊 <b>Статус отчетов на {today.strftime('%d.%m')}</b>\n"
+        response += "🚀=Старт, 🏁=Финиш\n"
         
         if sea_lines:
             response += f"\n🌊 <b>МОРЕ:</b>\n" + "\n".join(sea_lines) + "\n"
@@ -78,7 +88,11 @@ async def cmd_check_reports(message: types.Message):
         if land_lines:
             response += f"\n🚐 <b>СУША:</b>\n" + "\n".join(land_lines) + "\n"
 
-        response += f"\nОтправлено: {len(submissions)} из {len(unique_expected)}"
+        # Count unique start/finish pairs vs expected
+        total_starts = sum(1 for v in submitted_data.values() if "start" in v)
+        total_finishes = sum(1 for v in submitted_data.values() if "finish" in v)
+        
+        response += f"\nОтправлено: С:{total_starts} Ф:{total_finishes} из {len(unique_expected)}"
         
         await message.answer(response, parse_mode="HTML")
 
