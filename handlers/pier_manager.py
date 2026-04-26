@@ -417,21 +417,72 @@ async def ops_nat_parks(message: types.Message, state: FSMContext):
 
 @router.message(PierManagerStates.pier_ops, F.text == "📩 Конверты NP")
 async def ops_envelope_start(message: types.Message, state: FSMContext):
-    await state.set_state(PierManagerStates.envelope_calc)
+    data = await state.get_data()
+    pier = data.get("selected_pier")
+    if not pier:
+        await cmd_pier_manager_dashboard(message, state)
+        return
+
+    target_date = get_phuket_now().date()
+    date_str = target_date.strftime("%d.%m.%Y")
     now = get_phuket_now()
     is_sunday = now.weekday() == 6
-    sunday_note = " \n⚠️ <b>Сегодня воскресенье</b> — JB без скидок!" if is_sunday else ""
+
+    await message.answer(f"⏳ Рассчитываю конверты для лодок на пирсе <b>{pier}</b>...", parse_mode="HTML")
+
+    plans = await sea_plan_service.get_pier_detailed_plan(pier, target_date)
+
+    report = (
+        f"📩 <b>Авто-расчёт конвертов — {pier} ({date_str})</b>\n"
+        f"📅 {now.strftime('%H:%M')} | {'⚠️ ВОСКРЕСЕНЬЕ' if is_sunday else now.strftime('%A')}\n"
+        f"──────────────────\n"
+    )
+
+    if not plans:
+        report += "❌ Плана на сегодня не найдено.\n"
+    else:
+        grand_total_all = 0
+        for plan in sorted(plans, key=lambda x: x.boat):
+            # Parse PAX from plan.pax_string (e.g. "22/0/0")
+            pa, pc, pi = 0, 0, 0
+            try:
+                parts = plan.pax_string.split("/")
+                pa = int(parts[0]) if parts[0].isdigit() else 0
+                pc = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                pi = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            except Exception:
+                pass
+
+            if pa + pc + pi == 0:
+                continue
+
+            report += f"🚢 <b>{plan.boat}</b> (PAX: <code>{plan.pax_string}</code>)\n"
+            boat_total = 0
+            for code in ["PP", "JB", "HG"]:
+                fee = NP_FEES[code]
+                total, formula = _calc_envelope(code, pa, pc, is_sunday)
+                boat_total += total
+                report += f"  {fee['emoji']} <code>{total:,}฿</code> ({formula})\n"
+            
+            report += f"  💰 Итого лодка: <b>{boat_total:,}฿</b>\n"
+            report += "──────────────────\n"
+            grand_total_all += boat_total
+
+        if grand_total_all > 0:
+            report += f"💼 <b>ОБЩИЙ ИТОГ ПИРС: {grand_total_all:,}฿</b>\n\n"
+        else:
+            report += "Нет активных лодок с PAX > 0.\n\n"
+
+    report += (
+        "💡 Выше — данные из Sea Plan.\n"
+        "Чтобы пересчитать вручную, введи PAX (например <code>22</code> или <code>22/0/0</code>):"
+    )
 
     builder = ReplyKeyboardBuilder()
     builder.button(text="❌ Отмена")
 
-    await message.answer(
-        f"📩 <b>Калькулятор конвертов NP</b>{sunday_note}\n\n"
-        "Введи PAX в формате <code>A/C/I</code> или просто <code>A</code>\n"
-        "Пример: <code>22/0/0</code> или <code>22</code>",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup(resize_keyboard=True)
-    )
+    await state.set_state(PierManagerStates.envelope_calc)
+    await message.answer(report, parse_mode="HTML", reply_markup=builder.as_markup(resize_keyboard=True))
 
 
 @router.message(PierManagerStates.envelope_calc, F.text == "❌ Отмена")
