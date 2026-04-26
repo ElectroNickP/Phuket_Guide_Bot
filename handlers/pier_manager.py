@@ -39,14 +39,15 @@ NP_PROGRAM_MAP: list[tuple[str, list[str]]] = [
 ]
 
 # NP fees
+# parking = flat fee per boat visit (not per person)
 NP_FEES = {
     "PP": {
         "emoji": "🏝",
         "name": "Phi Phi (PP)",
-        "adult": 400,
+        "adult": 350,
         "child": 200,
-        "parking": 100,
-        "free_rule": "каждые 10 — 1 бесплатно (10-1)",
+        "parking_flat": 100,  # flat per visit
+        "free_per_10": 0,     # optional ("can cut"), not applied by default
         "sunday_note": None,
     },
     "JB": {
@@ -54,8 +55,8 @@ NP_FEES = {
         "name": "James Bond (JB)",
         "adult": 300,
         "child": 150,
-        "parking": 100,
-        "free_rule": "каждые 10 — 2 бесплатно (10-8)",
+        "parking_flat": 100,
+        "free_per_10": 2,     # every 10 pax → 2 free (pay 8)
         "sunday_note": "⚠️ Воскресенье: полная оплата, без бесплатных!",
     },
     "HG": {
@@ -63,8 +64,8 @@ NP_FEES = {
         "name": "Hong Island (HG)",
         "adult": 300,
         "child": 150,
-        "parking": None,
-        "free_rule": "каждый 10-й бесплатно (10-1)",
+        "parking_flat": 0,
+        "free_per_10": 1,     # every 10 pax → 1 free
         "sunday_note": None,
     },
 }
@@ -73,6 +74,7 @@ class PierManagerStates(StatesGroup):
     waiting_for_pier = State()
     dashboard = State()
     pier_ops = State()
+    envelope_calc = State()  # waiting for PAX input
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
@@ -206,16 +208,19 @@ async def show_pier_ops_menu(message: types.Message, pier: str):
     builder = ReplyKeyboardBuilder()
     builder.button(text="💰 Открыть кассу")
     builder.button(text="🏞 Нац. парки")
+    builder.button(text="📩 Конверты NP")
     builder.button(text="📊 Итоги дня")
     builder.button(text="⛴ Лодки сегодня")
     builder.button(text="👤 Гиды сегодня")
     builder.button(text="🔙 К выбору пирса")
-    builder.adjust(2, 1, 2, 1)
+    builder.adjust(2, 1, 1, 2, 1)
 
     now = get_phuket_now()
+    is_sunday = now.weekday() == 6
+    sunday_warn = "\n⚠️ Сегодня воскресенье — JB без бесплатных!" if is_sunday else ""
     await message.answer(
         f"🚪 <b>Пирс {pier} открыт</b>\n"
-        f"📅 {now.strftime('%d.%m.%Y')}  🕐 {now.strftime('%H:%M')}\n\n"
+        f"📅 {now.strftime('%d.%m.%Y')}  🕐 {now.strftime('%H:%M')}{sunday_warn}\n\n"
         f"Выберите действие:",
         parse_mode="HTML",
         reply_markup=builder.as_markup(resize_keyboard=True)
@@ -262,23 +267,84 @@ def _detect_nps(program_name: str) -> list[str]:
 def _np_fee_line(code: str) -> str:
     fee = NP_FEES[code]
     now = get_phuket_now()
+    is_sunday = now.weekday() == 6
     lines = []
     # Price line
     price = f"{fee['emoji']} взр. {fee['adult']}฿ / реб. {fee['child']}฿"
-    if fee["parking"]:
-        price += f" / парк. {fee['parking']}฿"
+    if fee["parking_flat"]:
+        price += f" + {fee['parking_flat']}฿ паркинг (за заход)"
     else:
-        price += " / без парковки"
+        price += " (без парковки)"
     lines.append(f"  💵 {price}")
     # Free rule
-    if fee["free_rule"]:
-        lines.append(f"  🎫 Бесплатно: {fee['free_rule']}")
-    # Sunday warning (if today is Sunday)
-    if fee["sunday_note"] and now.weekday() == 6:  # 6 = Sunday
+    if fee["free_per_10"] and not (code == "JB" and is_sunday):
+        lines.append(f"  🎫 Бесплатно: каждые 10 — {fee['free_per_10']} бесплатно")
+    if fee["sunday_note"] and is_sunday:
         lines.append(f"  {fee['sunday_note']}")
-    elif fee["sunday_note"]:
+    elif fee["sunday_note"] and not is_sunday:
         lines.append(f"  ℹ️ {fee['sunday_note']}")
     return "\n".join(lines)
+
+
+def _calc_envelope(code: str, adults: int, children: int, is_sunday: bool) -> tuple[int, str]:
+    """
+    Returns (total_thb, explanation_str).
+    Rules:
+      PP : A×350 + C×200 + 100 flat parking (no auto-free)
+      JB weekday: (A - floor(A/10)×2)×300 + (C - floor(C/10)×2)×150 + 100 parking
+      JB Sunday : A×300 + C×150 + 100 parking (full price, no free)
+      HG : (A - floor(A/10))×300 + (C - floor(C/10))×150 (no parking)
+    """
+    fee = NP_FEES[code]
+    parking = fee["parking_flat"]
+    lines = []
+
+    if code == "PP":
+        pay_a = adults
+        pay_c = children
+        total = pay_a * 350 + pay_c * 200 + parking
+        if pay_a:
+            lines.append(f"{pay_a}×350฿")
+        if pay_c:
+            lines.append(f"{pay_c}×200฿ (дет)")
+        if parking:
+            lines.append(f"+{parking}฿ паркинг")
+
+    elif code == "JB":
+        if is_sunday:
+            pay_a, pay_c = adults, children
+            free_a = free_c = 0
+            lines.append("⚠️ Воскресенье — все платят")
+        else:
+            free_a = (adults // 10) * 2
+            free_c = (children // 10) * 2
+            pay_a = adults - free_a
+            pay_c = children - free_c
+        total = pay_a * 300 + pay_c * 150 + parking
+        if pay_a:
+            lines.append(f"{pay_a}×300฿")
+        if not is_sunday and (free_a or free_c):
+            lines.append(f"(-{free_a} беспл.)")
+        if pay_c:
+            lines.append(f"{pay_c}×150฿ (дет)")
+        if parking:
+            lines.append(f"+{parking}฿ паркинг")
+
+    else:  # HG
+        free_a = adults // 10
+        free_c = children // 10
+        pay_a = adults - free_a
+        pay_c = children - free_c
+        total = pay_a * 300 + pay_c * 150  # no parking
+        if pay_a:
+            lines.append(f"{pay_a}×300฿")
+        if free_a:
+            lines.append(f"(-{free_a} беспл.)")
+        if pay_c:
+            lines.append(f"{pay_c}×150฿ (дет)")
+
+    formula = " ".join(lines) + f" = {total}฿"
+    return total, formula
 
 
 @router.message(PierManagerStates.pier_ops, F.text == "🏞 Нац. парки")
@@ -344,6 +410,78 @@ async def ops_nat_parks(message: types.Message, state: FSMContext):
     report += f"🎫 Итого туристов с нац. парками: <b>{total_np_pax}</b>"
 
     await message.answer(report, parse_mode="HTML")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPS: 📩 Конверты NP — envelope calculator
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.message(PierManagerStates.pier_ops, F.text == "📩 Конверты NP")
+async def ops_envelope_start(message: types.Message, state: FSMContext):
+    await state.set_state(PierManagerStates.envelope_calc)
+    now = get_phuket_now()
+    is_sunday = now.weekday() == 6
+    sunday_note = " \n⚠️ <b>Сегодня воскресенье</b> — JB без скидок!" if is_sunday else ""
+
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="❌ Отмена")
+
+    await message.answer(
+        f"📩 <b>Калькулятор конвертов NP</b>{sunday_note}\n\n"
+        "Введи PAX в формате <code>A/C/I</code> или просто <code>A</code>\n"
+        "Пример: <code>22/0/0</code> или <code>22</code>",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
+
+
+@router.message(PierManagerStates.envelope_calc, F.text == "❌ Отмена")
+async def ops_envelope_cancel(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    pier = data.get("selected_pier", "—")
+    await state.set_state(PierManagerStates.pier_ops)
+    await show_pier_ops_menu(message, pier)
+
+
+@router.message(PierManagerStates.envelope_calc, F.text.regexp(r"^\d+(/\d+(/\d+)?)?$"))
+async def ops_envelope_calc(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    pier = data.get("selected_pier", "—")
+    now = get_phuket_now()
+    is_sunday = now.weekday() == 6
+
+    # Parse PAX
+    parts = message.text.strip().split("/")
+    try:
+        adults   = int(parts[0]) if len(parts) > 0 else 0
+        children = int(parts[1]) if len(parts) > 1 else 0
+        infants  = int(parts[2]) if len(parts) > 2 else 0
+    except ValueError:
+        await message.answer("❌ Неверный формат. Введи <code>22/0/0</code> или <code>22</code>", parse_mode="HTML")
+        return
+
+    date_str = now.strftime("%d.%m.%Y")
+    day_label = "⚠️ ВОСКРЕСЕНЬЕ" if is_sunday else now.strftime("%A")
+
+    report = (
+        f"📩 <b>Конверты NP — {pier} ({date_str})</b>\n"
+        f"👥 PAX: <code>{adults}/{children}/{infants}</code>  |  {day_label}\n"
+        f"──────────────────\n"
+    )
+
+    grand_total = 0
+    for code in ["PP", "JB", "HG"]:
+        fee = NP_FEES[code]
+        total, formula = _calc_envelope(code, adults, children, is_sunday)
+        grand_total += total
+        report += f"{fee['emoji']} <b>{fee['name']}</b>\n"
+        report += f"  {formula}\n"
+        report += f"  💵 <b>{total:,}฿</b>\n"
+        report += "──────────────────\n"
+
+    report += f"💼 Итого в конвертах: <b>{grand_total:,}฿</b>"
+
+    await message.answer(report, parse_mode="HTML")
+    # Stay in envelope_calc state so user can try different PAX
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OPS: 📊 Итоги дня
