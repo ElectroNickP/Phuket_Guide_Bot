@@ -40,9 +40,33 @@ NP_PROGRAM_MAP: list[tuple[str, list[str]]] = [
 
 # NP fees
 NP_FEES = {
-    "PP": {"emoji": "🏝", "name": "Phi Phi (PP)",  "adult": 350, "child": 200, "parking": 100, "note": "400 для приватных"},
-    "JB": {"emoji": "🗿", "name": "James Bond (JB)","adult": 300, "child": 150, "parking": 100, "note": None},
-    "HG": {"emoji": "🌊", "name": "Hong Island (HG)","adult": 300, "child": 150, "parking": None, "note": "Без парковки"},
+    "PP": {
+        "emoji": "🏝",
+        "name": "Phi Phi (PP)",
+        "adult": 400,
+        "child": 200,
+        "parking": 100,
+        "free_rule": "каждые 10 — 1 бесплатно (10-1)",
+        "sunday_note": None,
+    },
+    "JB": {
+        "emoji": "🗿",
+        "name": "James Bond (JB)",
+        "adult": 300,
+        "child": 150,
+        "parking": 100,
+        "free_rule": "каждые 10 — 2 бесплатно (10-8)",
+        "sunday_note": "⚠️ Воскресенье: полная оплата, без бесплатных!",
+    },
+    "HG": {
+        "emoji": "🌊",
+        "name": "Hong Island (HG)",
+        "adult": 300,
+        "child": 150,
+        "parking": None,
+        "free_rule": "каждый 10-й бесплатно (10-1)",
+        "sunday_note": None,
+    },
 }
 
 class PierManagerStates(StatesGroup):
@@ -236,13 +260,25 @@ def _detect_nps(program_name: str) -> list[str]:
 
 
 def _np_fee_line(code: str) -> str:
-    f = NP_FEES[code]
-    parts = [f"{f['emoji']} {f['name']}: взр. {f['adult']}฿ / реб. {f['child']}฿"]
-    if f["parking"]:
-        parts.append(f"парковка {f['parking']}฿")
-    if f["note"]:
-        parts.append(f"({f['note']})")
-    return "  " + " · ".join(parts)
+    fee = NP_FEES[code]
+    now = get_phuket_now()
+    lines = []
+    # Price line
+    price = f"{fee['emoji']} взр. {fee['adult']}฿ / реб. {fee['child']}฿"
+    if fee["parking"]:
+        price += f" / парк. {fee['parking']}฿"
+    else:
+        price += " / без парковки"
+    lines.append(f"  💵 {price}")
+    # Free rule
+    if fee["free_rule"]:
+        lines.append(f"  🎫 Бесплатно: {fee['free_rule']}")
+    # Sunday warning (if today is Sunday)
+    if fee["sunday_note"] and now.weekday() == 6:  # 6 = Sunday
+        lines.append(f"  {fee['sunday_note']}")
+    elif fee["sunday_note"]:
+        lines.append(f"  ℹ️ {fee['sunday_note']}")
+    return "\n".join(lines)
 
 
 @router.message(PierManagerStates.pier_ops, F.text == "🏞 Нац. парки")
