@@ -50,10 +50,16 @@ class GoogleSheetsService:
                 logger.info(f"Successfully loaded spreadsheet: {self._spreadsheet.title}")
             except Exception as e:
                 logger.error(f"Failed to open spreadsheet {sheet_id}: {e}")
-                if self._spreadsheet and self._current_spreadsheet_id == sheet_id:
+                
+                # If it's a permission error, we should probably let the caller know immediately
+                # so it doesn't just fail silently with 'None'
+                is_permission_error = "403" in str(e) or "permission" in str(e).lower()
+                
+                if self._spreadsheet and self._current_spreadsheet_id == sheet_id and not is_permission_error:
                     logger.warning("Using stale spreadsheet instance due to connection error.")
                 else:
-                    return None
+                    # Re-raise so handlers can provide better feedback
+                    raise e
         return self._spreadsheet
 
     async def get_sheet_by_date(self, target_date: datetime.date):

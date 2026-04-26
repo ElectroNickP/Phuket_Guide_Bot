@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     DB_URL: str = "sqlite+aiosqlite:///data/bot_database.db"
     REDIS_URL: str = "redis://redis:6379/0"
     
+    # WebApp settings
+    WEBAPP_URL: str = "https://your-app.ngrok.app" # Needs to be HTTPS
+    WEBAPP_PORT: int = 8080
+    
     # Intervals
     POLLING_INTERVAL: int = 600  # 10 minutes in seconds
 

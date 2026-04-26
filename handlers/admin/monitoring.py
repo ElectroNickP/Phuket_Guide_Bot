@@ -12,6 +12,8 @@ from database.db import AsyncSessionLocal
 from sqlalchemy import select, desc, func
 import html
 import re
+import gspread
+from config import config
 
 from .base import ADMIN_ALL, IsAdminFilter
 
@@ -31,29 +33,44 @@ async def process_monitor_main(callback: types.CallbackQuery):
 async def _cmd_monitor_guides_base(message: types.Message):
     await message.edit_text("🔍 Загружаю список всех гидов...") if hasattr(message, 'edit_text') and message.reply_markup else None
     
-    sheet = await google_sheets.get_current_month_sheet()
-    if not sheet:
-        await message.answer("❌ Не удалось найти лист с расписанием.")
-        return
+    try:
+        sheet = await google_sheets.get_current_month_sheet()
+        if not sheet:
+            await message.answer("❌ Не удалось найти лист с расписанием.")
+            return
 
-    staff, freelance = await google_sheets.parse_guides(sheet)
-    
-    if not staff and not freelance:
-        await message.answer("❌ Гиды не найдены в таблице.")
-        return
+        staff, freelance = await google_sheets.parse_guides(sheet)
+        
+        if not staff and not freelance:
+            await message.answer("❌ Гиды не найдены в таблице.")
+            return
 
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🏢 Штатные гиды", callback_data="mon_v2_list_staff"))
-    builder.row(types.InlineKeyboardButton(text="🌍 Фрилансеры", callback_data="mon_v2_list_freelance"))
-    builder.row(types.InlineKeyboardButton(text="📊 Показать всё расписание", callback_data="mon_v2_all"))
-    
-    await message.answer(
-        f"👥 <b>Мониторинг гидов</b>\n"
-        f"Штат: {len(staff)}, Фриланс: {len(freelance)}\n\n"
-        "Выберите категорию или посмотрите общее расписание:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="🏢 Штатные гиды", callback_data="mon_v2_list_staff"))
+        builder.row(types.InlineKeyboardButton(text="🌍 Фрилансеры", callback_data="mon_v2_list_freelance"))
+        builder.row(types.InlineKeyboardButton(text="📊 Показать всё расписание", callback_data="mon_v2_all"))
+        
+        await message.answer(
+            f"👥 <b>Мониторинг гидов</b>\n"
+            f"Штат: {len(staff)}, Фриланс: {len(freelance)}\n\n"
+            "Выберите категорию или посмотрите общее расписание:",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except gspread.exceptions.APIError as e:
+        if "403" in str(e) or "permission" in str(e).lower():
+            service_account = "bot-reader-telegram@best-telegram-bots.iam.gserviceaccount.com"
+            await message.answer(
+                f"❌ <b>Ошибка доступа к Google Таблице (403)</b>\n\n"
+                f"Пожалуйста, предоставь доступ сервисному аккаунту:\n"
+                f"<code>{service_account}</code>\n"
+                f"к таблице с расписанием с правами <b>Редактора</b> или <b>Читателя</b>.",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(f"❌ Ошибка Google Sheets: {e}")
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при загрузке данных: {e}")
 
 @router.callback_query(F.data.startswith("mon_v2_list_"))
 async def process_admin_monitor_type(callback: types.CallbackQuery):

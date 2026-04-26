@@ -8,7 +8,7 @@ from aiogram.methods import SendMessage, EditMessageText, SendPhoto, SendDocumen
 from aiogram.methods.base import TelegramMethod
 from config import config
 from database.db import init_db
-from handlers import common, guide, admin, feedback, reports, help
+from handlers import common, guide, admin, feedback, reports, help as help_handler, pier_manager
 from services.scheduler import setup_scheduler
 from utils.logging_middleware import LoggingMiddleware
 from loguru import logger
@@ -156,10 +156,15 @@ async def main():
     # ─── Register Routers ─────────────────────────────────────────────────────
     dp.include_router(common.router)
     dp.include_router(admin.admin_router)
+    dp.include_router(pier_manager.router)
     dp.include_router(feedback.router)
     dp.include_router(guide.router)
     dp.include_router(reports.router)
-    dp.include_router(help.router)
+    dp.include_router(help_handler.router)
+
+    # Start WebApp Backend
+    from services.webapp import setup_webapp
+    webapp_runner = await setup_webapp(bot)
 
     # Start Polling
     logger.info("Bot started and polling...")
@@ -169,7 +174,8 @@ async def main():
         logger.exception(f"Fatal error in polling: {e}")
     finally:
         await bot.session.close()
-        logger.info("Bot stopped.")
+        await webapp_runner.cleanup()
+        logger.info("Bot & WebApp stopped.")
 
 
 if __name__ == "__main__":

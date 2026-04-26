@@ -136,9 +136,10 @@ class SeaPlanService:
                     "Columns may have shifted — verify sheet structure!"
                 )
 
-    async def get_guide_sea_plan(self, username: str, target_date: datetime.date) -> List[SeaPlanDTO]:
+    async def _parse_sea_plan(self, target_date: datetime.date, filter_fn=None) -> List[SeaPlanDTO]:
         """
-        Parses the Sea Plan for a specific guide, grouping all data by boat.
+        Generic parser for the Sea Plan sheet.
+        filter_fn: a function that takes (current_pier, current_boat, row) and returns bool
         """
         sheet = await self.get_date_worksheet(target_date)
         if not sheet:
@@ -178,6 +179,9 @@ class SeaPlanService:
             if not current_boat:
                 continue
                 
+            if filter_fn and not filter_fn(current_pier, current_boat, row):
+                continue
+
             guide_str = row[7].strip()
             prog_name = row[4].strip()
             pax_str = row[5].strip()
@@ -202,14 +206,14 @@ class SeaPlanService:
             
             if prog_name:
                 pax_val = 0
-                a, c, i = 0, 0, 0
+                a, c, i_val = 0, 0, 0
                 try:
                     if '/' in pax_str:
                         parts = pax_str.replace(" ", "").split('/')
                         a = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
                         c = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-                        i = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
-                        pax_val = a + c + i
+                        i_val = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+                        pax_val = a + c + i_val
                     elif '+' in pax_str:
                         parts = pax_str.replace(" ", "").split('+')
                         a = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
@@ -242,20 +246,46 @@ class SeaPlanService:
                     curr_c = int(curr_parts[1]) if len(curr_parts) > 1 else 0
                     curr_i = int(curr_parts[2]) if len(curr_parts) > 2 else 0
                 
-                dto.pax_string = f"{curr_a + a}/{curr_c + c}/{curr_i + i}"
+                dto.pax_string = f"{curr_a + a}/{curr_c + c}/{curr_i + i_val}"
+            
             if guide_str:
-                matches = re.findall(r'@(\w+)', guide_str)
-                is_me = False
-                for uname in matches:
-                    if uname.lower() == username.lower():
-                        is_me = True
-                        dto.is_assigned = True
-                
                 # Check if guide already in list
                 if not any(g.full_info == guide_str for g in dto.guides):
-                    dto.guides.append(GuideDTO(full_info=guide_str, is_me=is_me))
+                    dto.guides.append(GuideDTO(full_info=guide_str, is_me=False))
 
-        return [dto for dto in boats_data.values() if dto.is_assigned]
+        return list(boats_data.values())
+
+    async def get_guide_sea_plan(self, username: str, target_date: datetime.date) -> List[SeaPlanDTO]:
+        """
+        Parses the Sea Plan for a specific guide, grouping all data by boat.
+        """
+        username_lower = username.lower()
+        
+        def filter_guide(pier, boat, row):
+            guide_str = row[7].strip()
+            return f"@{username_lower}" in guide_str.lower()
+
+        plans = await self._parse_sea_plan(target_date, filter_guide)
+        for p in plans:
+            p.is_assigned = True
+            for g in p.guides:
+                if f"@{username_lower}" in g.full_info.lower():
+                    g.is_me = True
+        return plans
+
+    async def get_pier_detailed_plan(self, pier_name: str, target_date: datetime.date) -> List[SeaPlanDTO]:
+        """
+        Parses the Sea Plan for a specific pier, returning all boats and their details.
+        """
+        pier_name_upper = pier_name.upper()
+        
+        def filter_pier(pier, boat, row):
+            return pier and pier_name_upper in pier.upper()
+
+        plans = await self._parse_sea_plan(target_date, filter_pier)
+        for p in plans:
+            p.is_assigned = True
+        return plans
 
     async def get_active_sea_guides(self, target_dates: list[datetime.date]) -> list[str]:
         """

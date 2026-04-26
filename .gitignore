@@ -34,3 +34,7 @@ google service account/
 # OS
 .DS_Store
 Thumbs.db
+
+# SQLite
+*.db
+*.sqlite3

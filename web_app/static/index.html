@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Phuket Guide App</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Google Fonts for modern look -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1 id="greeting">Loading...</h1>
+            <p id="date-display" class="subtitle"></p>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <div class="tabs">
+            <button class="tab-btn active" data-target="schedule-tab">Расписание</button>
+            <button class="tab-btn" data-target="reports-tab">Отчеты</button>
+        </div>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            
+            <!-- Schedule Tab Content -->
+            <div id="schedule-tab" class="tab-content active">
+                <div id="schedule-loading" class="loader">Получаем данные...</div>
+                <div id="schedule-cards" class="cards-container">
+                    <!-- Cards will be injected via JS -->
+                </div>
+            </div>
+
+            <!-- Reports Tab Content -->
+            <div id="reports-tab" class="tab-content" style="display: none;">
+                
+                <div class="card premium-card">
+                    <h2>🚀 Старт программы</h2>
+                    <form id="start-report-form">
+                        <div class="form-group">
+                            <label>Фактическое время старта</label>
+                            <input type="time" id="start-time" required class="tg-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Реальное количество гостей (Взрослые)</label>
+                            <input type="number" id="start-pax-adults" placeholder="0" required class="tg-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Реальное количество детей</label>
+                            <input type="number" id="start-pax-children" placeholder="0" required class="tg-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Комментарий (опционально)</label>
+                            <textarea id="start-comment" placeholder="Напишите если гости опоздали или не явились..." class="tg-input"></textarea>
+                        </div>
+                        <button type="submit" class="tg-button">Отправить Старт</button>
+                    </form>
+                </div>
+
+                <div class="card premium-card" style="margin-top: 1rem;">
+                    <h2>🏁 Финиш программы</h2>
+                    <form id="finish-report-form">
+                        <div class="form-group">
+                            <label>Фактическое время финиша</label>
+                            <input type="time" id="finish-time" required class="tg-input">
+                        </div>
+                        <button type="submit" class="tg-button">Отправить Финиш</button>
+                    </form>
+                </div>
+
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Initialization and Logic -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

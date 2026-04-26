@@ -1,0 +1,183 @@
+:root {
+    --bg-color: var(--tg-theme-bg-color, #ffffff);
+    --text-color: var(--tg-theme-text-color, #222222);
+    --hint-color: var(--tg-theme-hint-color, #999999);
+    --link-color: var(--tg-theme-link-color, #168acd);
+    --button-color: var(--tg-theme-button-color, #0088cc);
+    --button-text-color: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg-color: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    --header-bg-color: var(--tg-theme-header-bg-color, #ffffff);
+    --accent-text-color: var(--tg-theme-accent-text-color, #0088cc);
+}
+
+body {
+    background-color: var(--secondary-bg-color);
+    color: var(--text-color);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+#app-container {
+    max-width: 600px;
+    margin: 0 auto;
+    background-color: var(--secondary-bg-color);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.app-header {
+    background-color: var(--bg-color);
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.app-header h1 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.app-header .subtitle {
+    margin: 4px 0 0 0;
+    color: var(--hint-color);
+    font-size: 13px;
+}
+
+/* Tabs Navigation */
+.tabs {
+    display: flex;
+    background-color: var(--bg-color);
+    margin-bottom: 12px;
+}
+
+.tab-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    padding: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--hint-color);
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.tab-btn.active {
+    color: var(--button-color);
+    border-bottom: 2px solid var(--button-color);
+}
+
+.content-area {
+    padding: 0 16px 16px 16px;
+    flex: 1;
+}
+
+/* Cards */
+.card, .program-card {
+    background-color: var(--bg-color);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.premium-card {
+    border-left: 4px solid var(--button-color);
+}
+
+.program-card h3 {
+    margin: 0 0 8px 0;
+    font-size: 16px;
+    color: var(--text-color);
+}
+
+.program-info {
+    font-size: 14px;
+    margin-bottom: 4px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.program-info span.label {
+    color: var(--hint-color);
+}
+
+.program-info span.value {
+    font-weight: 500;
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: var(--hint-color);
+    font-weight: 500;
+}
+
+.tg-input {
+    width: 100%;
+    box-sizing: border-box;
+    background-color: var(--secondary-bg-color);
+    color: var(--text-color);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 15px;
+    font-family: inherit;
+    transition: border-color 0.2s;
+}
+
+.tg-input:focus {
+    outline: none;
+    border-color: var(--button-color);
+}
+
+textarea.tg-input {
+    resize: vertical;
+    min-height: 80px;
+}
+
+.tg-button {
+    background-color: var(--button-color);
+    color: var(--button-text-color);
+    border: none;
+    width: 100%;
+    padding: 14px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.tg-button:active {
+    opacity: 0.8;
+}
+
+.loader {
+    text-align: center;
+    padding: 40px;
+    color: var(--hint-color);
+    font-weight: 500;
+}
+
+/* Dark theme overrides for inputs because var(--secondary-bg-color) might be dark */
+@media (prefers-color-scheme: dark) {
+    .tg-input {
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+}

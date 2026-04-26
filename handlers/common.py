@@ -87,7 +87,8 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
                 user = result.scalar_one_or_none()
                 if user:
                     target_role = UserRole.SUPER_ADMIN if is_pankonick else UserRole.HEAD_OF_GUIDE
-                    if user.role != target_role:
+                    # Only enforce role if user has no specialized role yet (like pier_manager)
+                    if user.role == UserRole.GUIDE:
                         user.role = target_role
                         await session.commit()
                         logger.info(f"Updated role for {user.username} to {target_role}")
@@ -101,7 +102,7 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
             if is_any_admin:
                 kb = get_admin_menu_keyboard(is_super_admin=is_super_adm)
             else:
-                kb = get_main_menu_keyboard()
+                kb = get_main_menu_keyboard(role=imp_user.get("role"))
                 
             await message.answer(
                 f"🎭 <b>РЕЖИМ ИМИТАЦИИ</b>\n"
@@ -114,10 +115,22 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
 
         if is_admin:
             logger.debug("Calling get_admin_menu_keyboard")
-            kb = get_admin_menu_keyboard(is_super_admin=is_pankonick)
+            # Fetch user from DB to get their specialized role if any
+            async with AsyncSessionLocal() as session:
+                query = select(User).where(User.telegram_id == message.from_user.id)
+                result = await session.execute(query)
+                db_user = result.scalar_one_or_none()
+                role = db_user.role if db_user else None
+            kb = get_admin_menu_keyboard(is_super_admin=is_pankonick, role=role)
         else:
             logger.debug("Calling get_main_menu_keyboard")
-            kb = get_main_menu_keyboard()
+            # Fetch user from DB to get their role
+            async with AsyncSessionLocal() as session:
+                query = select(User).where(User.telegram_id == message.from_user.id)
+                result = await session.execute(query)
+                db_user = result.scalar_one_or_none()
+                role = db_user.role if db_user else None
+            kb = get_main_menu_keyboard(role=role)
         
         welcome_text = (
             f"🌴 <b>Best Guide — Твой цифровой помощник на Пхукете</b>\n\n"

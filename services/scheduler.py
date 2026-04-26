@@ -14,9 +14,11 @@ from database.models import WakeUpConfirmation
 
 def get_wakeup_message_data(username: str, p_time_str: str, program_name: str, pickup_location: str):
     """Generates text and keyboard for wake-up message."""
+    from aiogram.types import WebAppInfo
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Проснулся / Готов", callback_data=f"wakeup_ok_{p_time_str}_{username}")
     kb.button(text="🆘 Есть проблема!", callback_data=f"wakeup_problem_{p_time_str}_{username}")
+    kb.button(text="📱 Открыть Mini App", web_app=WebAppInfo(url=config.WEBAPP_URL))
     kb.adjust(1)
     
     text = (

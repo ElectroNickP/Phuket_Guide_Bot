@@ -1,17 +1,25 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from config import config
 
-def get_main_menu_keyboard():
+def get_main_menu_keyboard(role: str | None = None):
     keyboard = [
+        [KeyboardButton(text="📱 Моя Панель (Mini App)", web_app=WebAppInfo(url=config.WEBAPP_URL))],
         [KeyboardButton(text="📅 Моё расписание"), KeyboardButton(text="🌊 План на море")],
         [KeyboardButton(text="🚐 План на суше"), KeyboardButton(text="👤 Мой статус")],
         [KeyboardButton(text="🚀 Начать программу"), KeyboardButton(text="🏁 Завершить программу")],
         [KeyboardButton(text="📝 Обратная связь"), KeyboardButton(text="🆘 Нужна помощь")],
         [KeyboardButton(text="📚 Библиотека гида")]
     ]
+    
+    from database.models import UserRole
+    if role in (UserRole.PIER_MANAGER, UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE):
+        keyboard.insert(1, [KeyboardButton(text="⚓️ Панель Пирс-Менеджера")])
+        
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
-def get_admin_menu_keyboard(is_super_admin: bool = False):
+def get_admin_menu_keyboard(is_super_admin: bool = False, role: str | None = None):
     keyboard = [
+        [KeyboardButton(text="👤 Управление пользователями")],
         [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="👁 Контроль Смены")],
         [KeyboardButton(text="🌊 Мониторинг моря"), KeyboardButton(text="🚐 Мониторинг суши")],
         [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="🔍 Тест-Аудит")],
@@ -19,6 +27,10 @@ def get_admin_menu_keyboard(is_super_admin: bool = False):
         [KeyboardButton(text="📝 Отчет за гида"), KeyboardButton(text="🔍 Тест Пробуждения")],
         [KeyboardButton(text="🆘 Тест SOS")]
     ]
+    
+    from database.models import UserRole
+    if role in (UserRole.PIER_MANAGER, UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE) or is_super_admin:
+        keyboard.insert(1, [KeyboardButton(text="⚓️ Панель Пирс-Менеджера")])
     if is_super_admin:
         keyboard.append([KeyboardButton(text="⏱ Интервал"), KeyboardButton(text="📋 Логи")])
         keyboard.append([KeyboardButton(text="🔗 Сменить таблицу"), KeyboardButton(text="🔗 Сменить таблицу (Море)")])
