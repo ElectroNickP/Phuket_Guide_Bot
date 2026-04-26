@@ -17,11 +17,32 @@ ALLOWED_ROLES = [UserRole.PIER_MANAGER, UserRole.SUPER_ADMIN, UserRole.ADMIN, Us
 
 PIERS = ["RPM", "Yamu", "Sarasin", "Chalong"]
 
-# National park keywords in program names
-NP_KEYWORDS = {
-    "PP": ["phi phi", "5 pearl", "5 pearls", "5pearl", "4 island", "4island", "rang yai free"],
-    "GB": ["james bond", "phang nga", "james", "phang-nga"],
-    "HG": ["hong", "hong island", "secret island"],
+# Maps lowercased program-name substrings → list of NP codes
+# Order matters: more specific first
+NP_PROGRAM_MAP: list[tuple[str, list[str]]] = [
+    ("pp bamboo",         ["PP"]),
+    ("pp ovn",            ["PP"]),
+    ("pp sunrise",        ["PP"]),
+    ("11 island",         ["PP", "JB", "HG"]),
+    ("11 остров",         ["PP", "JB", "HG"]),
+    ("4 pearl",           ["PP", "JB"]),
+    ("4 жемчуж",          ["PP", "JB"]),
+    ("5 pearl",           ["PP", "JB", "HG"]),
+    ("5 жемчуж",          ["PP", "JB", "HG"]),
+    ("krabi tropical",    ["HG"]),
+    ("phi phi",           ["PP"]),
+    ("james bond",        ["JB"]),
+    ("phang nga",         ["JB"]),
+    ("hong island",       ["HG"]),
+    ("hong",              ["HG"]),
+    ("4 island",          ["PP"]),
+]
+
+# NP fees
+NP_FEES = {
+    "PP": {"emoji": "🏝", "name": "Phi Phi (PP)",  "adult": 350, "child": 200, "parking": 100, "note": "400 для приватных"},
+    "JB": {"emoji": "🗿", "name": "James Bond (JB)","adult": 300, "child": 150, "parking": 100, "note": None},
+    "HG": {"emoji": "🌊", "name": "Hong Island (HG)","adult": 300, "child": 150, "parking": None, "note": "Без парковки"},
 }
 
 class PierManagerStates(StatesGroup):
@@ -205,14 +226,23 @@ async def ops_open_cash(message: types.Message, state: FSMContext):
 # OPS: 🏞 Нац. парки
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _detect_np(program_name: str) -> str | None:
-    """Returns 'PP', 'GB', 'HG' or None based on program name keywords."""
+def _detect_nps(program_name: str) -> list[str]:
+    """Returns list of NP codes for the given program name (may be multiple)."""
     lower = program_name.lower()
-    for np_code, keywords in NP_KEYWORDS.items():
-        for kw in keywords:
-            if kw in lower:
-                return np_code
-    return None
+    for keyword, codes in NP_PROGRAM_MAP:
+        if keyword in lower:
+            return codes
+    return []
+
+
+def _np_fee_line(code: str) -> str:
+    f = NP_FEES[code]
+    parts = [f"{f['emoji']} {f['name']}: взр. {f['adult']}฿ / реб. {f['child']}฿"]
+    if f["parking"]:
+        parts.append(f"парковка {f['parking']}฿")
+    if f["note"]:
+        parts.append(f"({f['note']})")
+    return "  " + " · ".join(parts)
 
 
 @router.message(PierManagerStates.pier_ops, F.text == "🏞 Нац. парки")
@@ -230,21 +260,23 @@ async def ops_nat_parks(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Данных для пирса <b>{pier}</b> на <b>{date_str}</b> не найдено.", parse_mode="HTML")
         return
 
-    # Group by NP code → list of (program_name, pax_str, boat)
-    np_groups: dict[str, list] = {"PP": [], "GB": [], "HG": []}
+    # Collect: np_code → list of program entries
+    # Each program can have multiple NP codes
+    np_entries: dict[str, list] = {"PP": [], "JB": [], "HG": []}
 
     for plan in plans:
         for prog in plan.programs:
-            np_code = _detect_np(prog.name)
-            if np_code:
-                np_groups[np_code].append({
-                    "boat": plan.boat,
-                    "program": prog.name,
-                    "pax": prog.pax,
-                    "guide": prog.guide,
-                })
+            codes = _detect_nps(prog.name)
+            for code in codes:
+                if code in np_entries:
+                    np_entries[code].append({
+                        "boat": plan.boat,
+                        "program": prog.name,
+                        "pax": prog.pax,
+                        "guide": prog.guide,
+                    })
 
-    has_any = any(np_groups[k] for k in np_groups)
+    has_any = any(np_entries[k] for k in np_entries)
     if not has_any:
         await message.answer(
             f"🏞 <b>Нац. парки — {pier} ({date_str})</b>\n\n"
@@ -253,27 +285,27 @@ async def ops_nat_parks(message: types.Message, state: FSMContext):
         )
         return
 
-    NP_EMOJI = {"PP": "🏝 PP (Phi Phi)", "GB": "🗿 GB (James Bond)", "HG": "🌊 HG (Hong Island)"}
-
     report = f"🏞 <b>Нац. парки — {pier} ({date_str})</b>\n\n"
     total_np_pax = 0
 
-    for code in ["PP", "GB", "HG"]:
-        entries = np_groups[code]
+    for code in ["PP", "JB", "HG"]:
+        entries = np_entries[code]
         if not entries:
             continue
-        report += f"<b>{NP_EMOJI[code]}</b>\n"
+        f = NP_FEES[code]
+        report += f"<b>{f['emoji']} {f['name']}</b>\n"
+        report += f"{_np_fee_line(code)}\n"
         for e in entries:
-            pax_total = _sum_pax(e["pax"])
+            pax_total = _sum_pax(e['pax'])
             total_np_pax += pax_total
             report += f"  🚢 {e['boat']} — {e['program']}\n"
             report += f"     👥 PAX: <code>{e['pax']}</code> ({pax_total} чел.)\n"
-            if e["guide"]:
+            if e['guide']:
                 report += f"     👤 Гид: {e['guide']}\n"
         report += "\n"
 
-    report += f"──────────────────\n"
-    report += f"🎫 Итого туристов с нац. парком: <b>{total_np_pax}</b>"
+    report += "──────────────────\n"
+    report += f"🎫 Итого туристов с нац. парками: <b>{total_np_pax}</b>"
 
     await message.answer(report, parse_mode="HTML")
 
