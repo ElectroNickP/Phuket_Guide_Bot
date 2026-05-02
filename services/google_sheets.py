@@ -273,4 +273,41 @@ class GoogleSheetsService:
         
         return results
 
+    async def get_store_price_list(self):
+        """
+        Fetches products from 'Store Price List' sheet.
+        Cols: A (Name), B (Cost price), C (Sale price)
+        """
+        try:
+            spreadsheet = await asyncio.to_thread(self.client.open_by_key, config.STORE_SPREADSHEET_ID)
+            sheet = await asyncio.to_thread(spreadsheet.worksheet, "Store Price List")
+            all_values = await self._get_cached_values(sheet)
+            if not all_values or len(all_values) < 1:
+                return []
+
+            products = []
+            # Skip header
+            for row in all_values[1:]:
+                if not row or not row[0].strip():
+                    continue
+                
+                name = row[0].strip()
+                try:
+                    cost_price = int(re.sub(r'[^\d]', '', row[1])) if len(row) > 1 and row[1] else 0
+                    sale_price = int(re.sub(r'[^\d]', '', row[2])) if len(row) > 2 and row[2] else 0
+                except (ValueError, TypeError):
+                    cost_price = 0
+                    sale_price = 0
+                
+                products.append({
+                    "name": name,
+                    "cost_price": cost_price,
+                    "sale_price": sale_price
+                })
+            
+            return products
+        except Exception as e:
+            logger.error(f"Error fetching Store Price List: {e}")
+            return []
+
 google_sheets = GoogleSheetsService()

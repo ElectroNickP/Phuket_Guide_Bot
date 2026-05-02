@@ -12,8 +12,10 @@ from aiogram import Bot
 from config import config
 from services.google_sheets import google_sheets
 from database.db import AsyncSessionLocal
-from database.models import User, ReportSubmission
-from sqlalchemy import select
+from database.models import User, ReportSubmission, UserRole, Product, CashSession, Sale, SaleItem
+from services.cash_service import cash_service
+from utils.auth_tokens import verify_auth_token
+from sqlalchemy import select, update
 from datetime import datetime
 
 routes = web.RouteTableDef()
@@ -24,13 +26,17 @@ def get_static_path():
 
 def validate_webapp_data(init_data: str, bot_token: str) -> dict | None:
     try:
+        if not init_data:
+            logger.warning("WebApp: No initData provided")
+            return None
+            
         parsed_data = dict(urllib.parse.parse_qsl(init_data))
         if "hash" not in parsed_data:
+            logger.warning("WebApp: No hash in initData")
             return None
         
         hash_val = parsed_data.pop("hash")
-        
-        # Sort keys
+        # Construction of data_check_string
         data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed_data.items()))
         
         secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
@@ -38,10 +44,74 @@ def validate_webapp_data(init_data: str, bot_token: str) -> dict | None:
         
         if calculated_hash == hash_val:
             user_data = json.loads(parsed_data.get("user", "{}"))
+            logger.info(f"WebApp: Auth success for @{user_data.get('username')} (ID: {user_data.get('id')})")
             return user_data
+        else:
+            logger.error(f"WebApp: Hash mismatch! Calc: {calculated_hash}, Got: {hash_val}")
     except Exception as e:
-        logger.error(f"Error validating WebApp init_data: {e}")
+        logger.error(f"WebApp: Error validating init_data: {e}")
     return None
+
+async def get_user_role(telegram_id: int = None, username: str = None) -> str | None:
+    async with AsyncSessionLocal() as session:
+        logger.debug(f"Checking role for ID: {telegram_id}, Username: {username}")
+        if telegram_id:
+            result = await session.execute(select(User.role).where(User.telegram_id == telegram_id))
+        elif username:
+            result = await session.execute(select(User.role).where(User.username == username))
+        else:
+            return None
+        return result.scalar_one_or_none()
+        
+async def get_authorized_user(request):
+    """Unified user detection via initData OR Token fallback."""
+    init_data = request.query.get('initData')
+    token = request.query.get('token')
+    
+    if not init_data and request.method == 'POST':
+        try:
+            body = await request.json()
+            init_data = body.get('initData')
+            token = token or body.get('token')
+        except: pass
+
+    # 1. Standard Telegram Auth
+    user_data = validate_webapp_data(init_data, config.BOT_TOKEN.get_secret_value())
+    if user_data and user_data.get('id'):
+        return int(user_data['id']), user_data.get('username')
+
+    # 2. Token Fallback (for buggy clients like tdesktop)
+    if token:
+        user_id = verify_auth_token(token, config.BOT_TOKEN.get_secret_value())
+        if user_id:
+            return user_id, None
+            
+    return None, None
+
+@routes.get('/api/init')
+async def handle_init(request):
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+        
+    async with AsyncSessionLocal() as session:
+        # Fetch user details and role
+        query = select(User).where(User.telegram_id == user_id)
+        result = await session.execute(query)
+        db_user = result.scalar_one_or_none()
+        
+        if not db_user:
+            return web.json_response({"status": "error", "message": "User not found"}, status=404)
+            
+        return web.json_response({
+            "status": "success",
+            "data": {
+                "user_id": db_user.telegram_id,
+                "username": db_user.username,
+                "name": db_user.full_name,
+                "role": db_user.role
+            }
+        })
 
 @routes.get('/')
 async def index_handler(request):
@@ -49,15 +119,17 @@ async def index_handler(request):
 
 @routes.get('/api/schedule')
 async def handle_get_schedule(request):
-    init_data = request.query.get('initData')
-    if not init_data:
-        return web.json_response({"status": "error", "message": "Missing initData"}, status=401)
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
         
-    user_data = validate_webapp_data(init_data, config.BOT_TOKEN.get_secret_value())
-    if not user_data or not user_data.get('username'):
-        return web.json_response({"status": "error", "message": "Invalid initData or missing username"}, status=401)
-        
-    username = user_data['username']
+    if not username: # If token auth was used, fetch username from DB
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User.username).where(User.telegram_id == user_id))
+            username = result.scalar_one_or_none()
+            
+    if not username:
+        return web.json_response({"status": "error", "message": "Username not determined"}, status=400)
     
     try:
         # Fetch 4-day schedule
@@ -96,14 +168,16 @@ async def handle_get_schedule(request):
 async def handle_submit_report(request):
     try:
         req_data = await request.json()
-        init_data = req_data.get('initData')
-        payload = req_data.get('payload', {})
+        user_id, username = await get_authorized_user(request)
+        if not user_id:
+            return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
         
-        user_data = validate_webapp_data(init_data, config.BOT_TOKEN.get_secret_value())
-        if not user_data or not user_data.get('username'):
-            return web.json_response({"status": "error", "message": "Invalid auth"}, status=401)
-            
-        username = user_data['username']
+        if not username:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(User.username).where(User.telegram_id == user_id))
+                username = result.scalar_one_or_none()
+        
+        payload = req_data.get('payload', {})
         rep_type = payload.get('type')
         bot: Bot = request.app['bot']
         
@@ -173,6 +247,134 @@ async def handle_submit_report(request):
         logger.exception("Error processing WebApp report")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
+
+
+# --- Pier Manager API ---
+
+@routes.get('/api/pier/products')
+async def handle_get_products(request):
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+
+    role = await get_user_role(telegram_id=user_id)
+    if role not in [UserRole.PIER_MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.HEAD_OF_GUIDE]:
+        logger.warning(f"API: Forbidden access for user {username} (ID: {user_id}) with role {role}")
+        return web.json_response({"status": "error", "message": "Forbidden"}, status=403)
+
+    products = await cash_service.get_active_products()
+    data = [{"id": p.id, "name": p.name, "cost_price": p.cost_price, "sale_price": p.sale_price} for p in products]
+    return web.json_response({"status": "success", "data": data})
+
+@routes.get('/api/pier/session')
+async def handle_get_session(request):
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+        
+    pier = request.query.get('pier')
+    logger.info(f"API: GET /api/pier/session called for pier {pier}")
+    
+    # Check role
+    role = await get_user_role(telegram_id=user_id)
+    if role not in [UserRole.PIER_MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.HEAD_OF_GUIDE]:
+        return web.json_response({"status": "error", "message": "Forbidden"}, status=403)
+    
+    # Always return the DAILY report (all sessions for today)
+    from utils.time import get_phuket_now
+    today = get_phuket_now().date()
+    daily_report = await cash_service.get_daily_report(pier, today)
+    
+    session_data = await cash_service.get_active_session(pier)
+    if session_data:
+        return web.json_response({
+            "status": "success", 
+            "data": {
+                "active": True,
+                "id": session_data.id,
+                "pier": session_data.pier,
+                "opened_at": session_data.opened_at.isoformat() if session_data.opened_at else None,
+                "report": daily_report
+            }
+        })
+    else:
+        return web.json_response({
+            "status": "success", 
+            "data": {
+                "active": False,
+                "report": daily_report if daily_report["sales_count"] > 0 else None
+            }
+        })
+
+@routes.post('/api/pier/session/open')
+async def handle_open_session(request):
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+        
+    req_data = await request.json()
+    pier = req_data.get('pier')
+    
+    session_data = await cash_service.open_session(pier, user_id)
+    return web.json_response({"status": "success", "session_id": session_data.id})
+
+@routes.post('/api/pier/session/close')
+async def handle_close_session(request):
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+        
+    req_data = await request.json()
+    session_id = req_data.get('session_id')
+    pier = req_data.get('pier')
+    
+    success = await cash_service.close_session(session_id)
+    
+    # Return the full daily report after closing
+    from utils.time import get_phuket_now
+    today = get_phuket_now().date()
+    daily_report = await cash_service.get_daily_report(pier, today) if pier else None
+    
+    return web.json_response({
+        "status": "success" if success else "error",
+        "report": daily_report
+    })
+
+@routes.post('/api/pier/sale')
+async def handle_pier_sale(request):
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+        
+    req_data = await request.json()
+    payload = req_data.get('payload') # {session_id, items, payment_type, pier}
+    
+    try:
+        sale = await cash_service.record_sale(
+            session_id=payload['session_id'],
+            pier=payload['pier'],
+            manager_id=user_id,
+            items_data=payload['items'], # [{'name', 'quantity', 'price'}]
+            payment_type=payload['payment_type']
+        )
+        return web.json_response({"status": "success", "sale_id": sale.id})
+    except Exception as e:
+        logger.exception("Error recording sale from WebApp")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+@routes.post('/api/pier/sync')
+async def handle_pier_sync(request):
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    try:
+        success = await cash_service.sync_products()
+        return web.json_response({"status": "success" if success else "error"})
+    except PermissionError:
+        return web.json_response({"status": "error", "message": "Permission denied to spreadsheet"}, status=403)
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 async def setup_webapp(bot: Bot) -> web.AppRunner:
     """Configures and runs the aiohttp web app asynchronously"""

@@ -21,5 +21,12 @@ services:
     depends_on:
       - redis
 
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://bot:8080
+    restart: always
+    depends_on:
+      - bot
+
 volumes:
   redis_data:

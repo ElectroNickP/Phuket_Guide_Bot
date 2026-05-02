@@ -1,12 +1,16 @@
-from aiogram import Router, types, F
+from aiogram import Router, types, F, Bot
+from aiogram.types import WebAppInfo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
+from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton, InlineKeyboardBuilder
 from database.models import UserRole
 from utils.permissions import RoleFilter
 from services.sea_plan import sea_plan_service
+from services.cash_service import cash_service
 from utils.time import get_phuket_now
+from utils.auth_tokens import generate_auth_token
 from loguru import logger
+from config import config
 import datetime
 import re
 
@@ -75,6 +79,12 @@ class PierManagerStates(StatesGroup):
     dashboard = State()
     pier_ops = State()
     envelope_calc = State()  # waiting for PAX input
+    
+    # Cash Register states
+    cash_main = State()
+    cash_sale_product = State()
+    cash_sale_quantity = State()
+    cash_sale_payment = State()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
@@ -205,15 +215,34 @@ async def open_pier_ops(message: types.Message, state: FSMContext):
 
 
 async def show_pier_ops_menu(message: types.Message, pier: str):
+    # Secure token generation for fallback auth
+    token = generate_auth_token(message.from_user.id, config.BOT_TOKEN.get_secret_value())
+    webapp_url = f"{config.WEBAPP_URL}/?pier={pier}&token={token}"
+    
+    # Dashboard Keyboard
     builder = ReplyKeyboardBuilder()
-    builder.button(text="💰 Открыть кассу")
+    builder.button(text="🖥 Веб-интерфейс", web_app=WebAppInfo(url=webapp_url))
+    builder.button(text="💰 Касса")
     builder.button(text="🏞 Нац. парки")
     builder.button(text="📩 Конверты NP")
     builder.button(text="📊 Итоги дня")
     builder.button(text="⛴ Лодки сегодня")
     builder.button(text="👤 Гиды сегодня")
     builder.button(text="🔙 К выбору пирса")
-    builder.adjust(2, 1, 1, 2, 1)
+    builder.adjust(1, 2, 1, 1, 2, 1)
+    
+    # Inline button for maximum reliability on Desktop
+    inline_builder = InlineKeyboardBuilder()
+    inline_builder.button(text="🖥 Внутри Telegram", web_app=WebAppInfo(url=webapp_url))
+    inline_builder.button(text="🌐 Внешний браузер", url=webapp_url)
+    inline_builder.adjust(1, 1)
+    
+    await message.answer(
+        f"⚓️ <b>Операции на пирсе {pier}</b>\n\nВыберите действие в меню или откройте веб-приложение для работы с кассой:",
+        reply_markup=builder.as_markup(resize_keyboard=True),
+        parse_mode="HTML"
+    )
+    await message.answer("💡 Рекомендуем использовать эту кнопку для входа:", reply_markup=inline_builder.as_markup())
 
     now = get_phuket_now()
     is_sunday = now.weekday() == 6
@@ -227,29 +256,331 @@ async def show_pier_ops_menu(message: types.Message, pier: str):
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# OPS: 💰 Открыть кассу
+# OPS: 💰 Касса (Cash Register)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.message(PierManagerStates.pier_ops, F.text == "💰 Открыть кассу")
-async def ops_open_cash(message: types.Message, state: FSMContext):
+@router.message(PierManagerStates.pier_ops, F.text == "💰 Касса")
+async def ops_cash_main(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    pier = data.get("selected_pier", "—")
-    now = get_phuket_now()
-    manager_name = message.from_user.full_name or message.from_user.username or "Неизвестно"
+    pier = data.get("selected_pier")
+    if not pier:
+        await cmd_pier_manager_dashboard(message, state)
+        return
 
-    text = (
-        f"💰 <b>Касса открыта</b>\n"
+    # Check for active session
+    session = await cash_service.get_active_session(pier)
+    await state.set_state(PierManagerStates.cash_main)
+    
+    if not session:
+        builder = ReplyKeyboardBuilder()
+        builder.button(text="🟢 Открыть новую смену")
+        builder.button(text="🔄 Синхронизировать товары")
+        builder.button(text="🔙 Назад")
+        builder.adjust(1)
+        
+        await message.answer(
+            f"💰 <b>Касса — Пирс {pier}</b>\n\nНет открытой смены. Пожалуйста, откройте смену, чтобы начать работу.",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup(resize_keyboard=True)
+        )
+    else:
+        await show_cash_menu(message, pier, session)
+
+
+async def show_cash_menu(message: types.Message, pier: str, session):
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🛒 Продажа")
+    builder.button(text="📊 Отчет за смену")
+    builder.button(text="🔴 Закрыть смену")
+    builder.button(text="🔙 Назад")
+    builder.adjust(1, 2, 1)
+    
+    now = get_phuket_now()
+    opened_at = session.opened_at.strftime("%H:%M")
+    
+    await message.answer(
+        f"💰 <b>Касса — Пирс {pier}</b>\n"
         f"──────────────────\n"
-        f"⚓️ Пирс: <b>{pier}</b>\n"
-        f"📅 Дата: <b>{now.strftime('%d.%m.%Y')}</b>\n"
-        f"🕐 Время открытия: <b>{now.strftime('%H:%M')}</b>\n"
-        f"👤 Менеджер: <b>{manager_name}</b>\n"
+        f"✅ Смена открыта в: <b>{opened_at}</b>\n"
+        f"🕒 Текущее время: <b>{now.strftime('%H:%M')}</b>\n"
+        f"👤 Менеджер: <b>{message.from_user.full_name}</b>\n"
         f"──────────────────\n"
-        f"✅ Зафиксировано. Хорошей смены!"
+        f"Выберите действие:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(resize_keyboard=True)
     )
 
-    logger.info(f"Pier {pier} cash opened by {message.from_user.id} ({manager_name}) at {now.strftime('%H:%M')}")
+@router.message(PierManagerStates.cash_main, F.text == "🟢 Открыть новую смену")
+async def ops_cash_open_session(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    pier = data.get("selected_pier")
+    manager_id = message.from_user.id
+    
+    session = await cash_service.open_session(pier, manager_id)
+    await show_cash_menu(message, pier, session)
+
+@router.message(PierManagerStates.cash_main, F.text == "🔄 Синхронизировать товары")
+async def ops_cash_sync_products(message: types.Message, state: FSMContext):
+    msg = await message.answer("⏳ Синхронизация товаров из Google Sheets...")
+    try:
+        success = await cash_service.sync_products()
+        if success:
+            await msg.edit_text("✅ Список товаров успешно обновлен!")
+        else:
+            await msg.edit_text("❌ Ошибка при синхронизации товаров. Проверьте логи.")
+    except PermissionError:
+        from config import config
+        # Fetch email from service account file or just hardcode if known from JSON
+        service_email = "bot-reader-telegram@best-telegram-bots.iam.gserviceaccount.com"
+        await msg.edit_text(
+            f"❌ <b>Доступ запрещен</b>\n\n"
+            f"Бот не имеет доступа к таблице с прайс-листом.\n\n"
+            f"Пожалуйста, предоставьте доступ (роль 'Редактор' или 'Читатель') для этого email:\n"
+            f"<code>{service_email}</code>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Sync error: {e}")
+        await msg.edit_text(f"❌ Произошла ошибка при синхронизации: {e}")
+
+@router.message(PierManagerStates.cash_main, F.text == "🛒 Продажа")
+async def ops_cash_start_sale(message: types.Message, state: FSMContext):
+    products = await cash_service.get_active_products()
+    if not products:
+        await message.answer("⚠️ Список товаров пуст. Пожалуйста, синхронизируйте товары.")
+        return
+
+    # Initialize cart
+    await state.update_data(cart=[])
+    await state.set_state(PierManagerStates.cash_sale_product)
+    await show_product_selection(message, products, [])
+
+async def show_product_selection(message: types.Message, products, cart):
+    builder = ReplyKeyboardBuilder()
+    for p in products:
+        builder.button(text=f"{p.name} ({p.sale_price}฿)")
+    
+    builder.row(KeyboardButton(text="✅ Оформить продажу"))
+    builder.row(KeyboardButton(text="❌ Отмена"))
+    builder.adjust(2)
+    
+    cart_text = ""
+    if cart:
+        cart_text = "<b>🛒 В корзине:</b>\n"
+        total = 0
+        for i, item in enumerate(cart):
+            item_total = item['quantity'] * item['price']
+            total += item_total
+            cart_text += f"{i+1}. {item['name']} x{item['quantity']} = {item_total}฿\n"
+        cart_text += f"──────────────────\n💰 <b>Итого: {total}฿</b>\n\n"
+
+    await message.answer(
+        f"{cart_text}🛍 <b>Выберите товар для добавления:</b>",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
+
+@router.message(PierManagerStates.cash_sale_product, F.text == "❌ Отмена")
+async def ops_cash_sale_cancel(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    pier = data.get("selected_pier")
+    session = await cash_service.get_active_session(pier)
+    await state.set_state(PierManagerStates.cash_main)
+    await show_cash_menu(message, pier, session)
+
+@router.message(PierManagerStates.cash_sale_product, F.text == "✅ Оформить продажу")
+async def ops_cash_sale_finish(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    cart = data.get("cart", [])
+    if not cart:
+        await message.answer("⚠️ Корзина пуста. Добавьте товары, прежде чем оформлять продажу.")
+        return
+    
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="💵 Наличные B")
+    builder.button(text="💳 Онлайн")
+    builder.button(text="🔙 Назад к товарам")
+    builder.adjust(2, 1)
+    
+    total = sum(item['quantity'] * item['price'] for item in cart)
+    await state.set_state(PierManagerStates.cash_sale_payment)
+    await message.answer(
+        f"💰 <b>Сумма к оплате: {total}฿</b>\n\nВыберите способ оплаты:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
+
+@router.message(PierManagerStates.cash_sale_product)
+async def ops_cash_select_product(message: types.Message, state: FSMContext):
+    text = message.text
+    # Parse product name from button text "Name (Price฿)"
+    match = re.match(r"(.+)\s\((\d+)฿\)", text)
+    if not match:
+        await message.answer("⚠️ Пожалуйста, используйте кнопки для выбора товара.")
+        return
+    
+    product_name = match.group(1).strip()
+    price = int(match.group(2))
+    
+    await state.update_data(current_item={'name': product_name, 'price': price})
+    await state.set_state(PierManagerStates.cash_sale_quantity)
+    
+    builder = ReplyKeyboardBuilder()
+    for q in [1, 2, 3, 4, 5, 10]:
+        builder.button(text=str(q))
+    builder.button(text="🔙 Назад")
+    builder.adjust(3)
+    
+    await message.answer(
+        f"🔢 <b>{product_name}</b>\n\nСколько штук?",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
+
+@router.message(PierManagerStates.cash_sale_quantity, F.text == "🔙 Назад")
+async def ops_cash_quantity_back(message: types.Message, state: FSMContext):
+    products = await cash_service.get_active_products()
+    data = await state.get_data()
+    cart = data.get("cart", [])
+    await state.set_state(PierManagerStates.cash_sale_product)
+    await show_product_selection(message, products, cart)
+
+@router.message(PierManagerStates.cash_sale_quantity, F.text.regexp(r"^\d+$"))
+async def ops_cash_select_quantity(message: types.Message, state: FSMContext):
+    quantity = int(message.text)
+    if quantity <= 0:
+        await message.answer("❌ Количество должно быть больше 0.")
+        return
+    
+    data = await state.get_data()
+    cart = data.get("cart", [])
+    current_item = data.get("current_item")
+    
+    # Add or update item in cart
+    existing_item = next((item for item in cart if item['name'] == current_item['name']), None)
+    if existing_item:
+        existing_item['quantity'] += quantity
+    else:
+        cart.append({
+            'name': current_item['name'],
+            'price': current_item['price'],
+            'quantity': quantity
+        })
+    
+    await state.update_data(cart=cart)
+    products = await cash_service.get_active_products()
+    await state.set_state(PierManagerStates.cash_sale_product)
+    await message.answer(f"✅ Добавлено: {current_item['name']} x{quantity}")
+    await show_product_selection(message, products, cart)
+
+@router.message(PierManagerStates.cash_sale_payment, F.text == "🔙 Назад к товарам")
+async def ops_cash_payment_back(message: types.Message, state: FSMContext):
+    products = await cash_service.get_active_products()
+    data = await state.get_data()
+    cart = data.get("cart", [])
+    await state.set_state(PierManagerStates.cash_sale_product)
+    await show_product_selection(message, products, cart)
+
+@router.message(PierManagerStates.cash_sale_payment, F.text.in_(["💵 Наличные B", "💳 Онлайн"]))
+async def ops_cash_confirm_sale(message: types.Message, state: FSMContext):
+    payment_type = "cash" if "Наличные" in message.text else "online"
+    data = await state.get_data()
+    cart = data.get("cart", [])
+    pier = data.get("selected_pier")
+    manager_id = message.from_user.id
+    
+    session = await cash_service.get_active_session(pier)
+    if not session:
+        await message.answer("❌ Смена была закрыта. Продажа невозможна.")
+        await ops_cash_main(message, state)
+        return
+        
+    sale = await cash_service.record_sale(session.id, pier, manager_id, cart, payment_type)
+    
+    # Confirmation text
+    items_text = ""
+    for item in cart:
+        items_text += f"• {item['name']} x{item['quantity']} = {item['quantity'] * item['price']}฿\n"
+    
+    receipt = (
+        f"✅ <b>Продажа зафиксирована</b>\n"
+        f"──────────────────\n"
+        f"{items_text}"
+        f"──────────────────\n"
+        f"💰 Итого: <b>{sale.total_amount}฿</b>\n"
+        f"💳 Оплата: <b>{message.text}</b>\n"
+        f"📅 {sale.created_at.strftime('%H:%M %d.%m.%Y')}\n"
+    )
+    
+    await message.answer(receipt, parse_mode="HTML")
+    await state.set_state(PierManagerStates.cash_main)
+    await show_cash_menu(message, pier, session)
+
+@router.message(PierManagerStates.cash_main, F.text == "📊 Отчет за смену")
+async def ops_cash_session_report(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    pier = data.get("selected_pier")
+    session = await cash_service.get_active_session(pier)
+    
+    if not session:
+        await message.answer("❌ Нет активной смены.")
+        return
+        
+    report = await cash_service.get_session_report(session.id)
+    
+    items_text = ""
+    for name, qty in sorted(report["items_summary"].items()):
+        items_text += f"• {name}: <b>{qty}</b> шт.\n"
+    
+    text = (
+        f"📊 <b>Отчет за смену — Пирс {pier}</b>\n"
+        f"📅 Открыта: {session.opened_at.strftime('%H:%M %d.%m.%Y')}\n"
+        f"──────────────────\n"
+        f"🛒 Продано товаров:\n{items_text or '—'}\n"
+        f"──────────────────\n"
+        f"💵 Наличные: <b>{report['cash_amount']}฿</b>\n"
+        f"💳 Онлайн: <b>{report['online_amount']}฿</b>\n"
+        f"💰 <b>ИТОГО: {report['total_amount']}฿</b>\n"
+        f"🧾 Всего чеков: <b>{report['sales_count']}</b>"
+    )
+    
     await message.answer(text, parse_mode="HTML")
+
+@router.message(PierManagerStates.cash_main, F.text == "🔴 Закрыть смену")
+async def ops_cash_close_session(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    pier = data.get("selected_pier")
+    session = await cash_service.get_active_session(pier)
+    
+    if not session:
+        await message.answer("❌ Смена уже закрыта.")
+        await ops_cash_main(message, state)
+        return
+        
+    # Get final report before closing
+    report = await cash_service.get_session_report(session.id)
+    await cash_service.close_session(session.id)
+    
+    text = (
+        f"🔴 <b>Смена закрыта</b>\n"
+        f"──────────────────\n"
+        f"🚢 Пирс: <b>{pier}</b>\n"
+        f"🕒 Время: <b>{get_phuket_now().strftime('%H:%M')}</b>\n"
+        f"💰 Итого за смену: <b>{report['total_amount']}฿</b>\n"
+        f"──────────────────\n"
+        f"✅ Данные сохранены. Спасибо за работу!"
+    )
+    
+    await message.answer(text, parse_mode="HTML")
+    await state.set_state(PierManagerStates.pier_ops)
+    await show_pier_ops_menu(message, pier)
+
+@router.message(PierManagerStates.cash_main, F.text == "🔙 Назад")
+async def ops_cash_back_to_ops(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    pier = data.get("selected_pier")
+    await state.set_state(PierManagerStates.pier_ops)
+    await show_pier_ops_menu(message, pier)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OPS: 🏞 Нац. парки

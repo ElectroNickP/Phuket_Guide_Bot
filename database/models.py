@@ -89,3 +89,46 @@ class WakeUpConfirmation(Base):
     status = Column(String, default="pending") # "pending", "confirmed", "problem", "no_response"
     sent_at = Column(DateTime, default=get_phuket_now)
     confirmed_at = Column(DateTime)
+
+# ─── CASH REGISTER MODELS ───────────────────────────────────────────────
+
+class Product(Base):
+    __tablename__ = 'products'
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, nullable=False)
+    cost_price = Column(Integer, default=0)
+    sale_price = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    last_updated = Column(DateTime, default=get_phuket_now, onupdate=get_phuket_now)
+
+class CashSession(Base):
+    __tablename__ = 'cash_sessions'
+    id = Column(Integer, primary_key=True)
+    pier = Column(String, nullable=False)
+    manager_id = Column(Integer, nullable=False) # Using telegram_id
+    opened_at = Column(DateTime, default=get_phuket_now)
+    closed_at = Column(DateTime)
+    status = Column(String, default="open") # "open", "closed"
+
+class Sale(Base):
+    __tablename__ = 'sales'
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey('cash_sessions.id'))
+    pier = Column(String, nullable=False)
+    manager_id = Column(Integer, nullable=False)
+    total_amount = Column(Integer, nullable=False)
+    payment_type = Column(String, nullable=False) # "cash", "online"
+    created_at = Column(DateTime, default=get_phuket_now)
+    
+    items = relationship("SaleItem", back_populates="sale")
+
+class SaleItem(Base):
+    __tablename__ = 'sale_items'
+    id = Column(Integer, primary_key=True)
+    sale_id = Column(Integer, ForeignKey('sales.id'))
+    product_name = Column(String, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    price_per_unit = Column(Integer, nullable=False)
+    total_price = Column(Integer, nullable=False)
+    
+    sale = relationship("Sale", back_populates="items")

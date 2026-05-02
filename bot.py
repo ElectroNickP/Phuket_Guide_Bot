@@ -141,6 +141,7 @@ async def main():
     logger.info(f"   Sea Plan Sheet: {config.DEFAULT_SEA_SPREADSHEET_ID}")
     logger.info(f"   DB            : {config.DB_URL}")
     logger.info(f"   Poll interval : {config.POLLING_INTERVAL}s")
+    logger.info(f"   WEBAPP URL    : {config.WEBAPP_URL}")
     logger.info("=" * 60)
 
     # Setup Scheduler

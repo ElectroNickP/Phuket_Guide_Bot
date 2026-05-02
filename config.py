@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     ADMIN_USERNAMES: str = ""  # Optional: admin usernames, comma-separated (e.g. "@user1, @user2")
     DEFAULT_SPREADSHEET_ID: str = "1VzzL9hKRSwqga1nsjJ9Df2AlkSBVw_6zRorXDy_MURs"
     DEFAULT_SEA_SPREADSHEET_ID: str = "1wtSeYmTnwcC5d-AxNt3zLaMZhe5-mRXfYJ-gm4nJQ7E"
+    STORE_SPREADSHEET_ID: str = "19bI7_HT8oxpS_tQBlMXTn3xooqdnn5t6aDRjiwEbYLM"
     SERVICE_ACCOUNT_FILE: str = "google service account/best-telegram-bots-9df5029c28e8.json"
     TESTER_USERNAMES: str = "ElectroNick_X, pankonick"  # Authorized to use /become_user
     REPORT_GROUP_ID: int = -1003556020066

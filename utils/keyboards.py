@@ -1,9 +1,13 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from config import config
 
-def get_main_menu_keyboard(role: str | None = None):
+def get_main_menu_keyboard(role: str | None = None, auth_token: str | None = None):
+    url = f"{config.WEBAPP_URL}/"
+    if auth_token:
+        url += f"?token={auth_token}"
+        
     keyboard = [
-        [KeyboardButton(text="📱 Моя Панель (Mini App)", web_app=WebAppInfo(url=config.WEBAPP_URL))],
+        [KeyboardButton(text="📱 Моя Панель (Mini App)", web_app=WebAppInfo(url=url))],
         [KeyboardButton(text="📅 Моё расписание"), KeyboardButton(text="🌊 План на море")],
         [KeyboardButton(text="🚐 План на суше"), KeyboardButton(text="👤 Мой статус")],
         [KeyboardButton(text="🚀 Начать программу"), KeyboardButton(text="🏁 Завершить программу")],
@@ -17,8 +21,13 @@ def get_main_menu_keyboard(role: str | None = None):
         
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
-def get_admin_menu_keyboard(is_super_admin: bool = False, role: str | None = None):
+def get_admin_menu_keyboard(is_super_admin: bool = False, role: str | None = None, auth_token: str | None = None):
+    url = f"{config.WEBAPP_URL}/"
+    if auth_token:
+        url += f"?token={auth_token}"
+        
     keyboard = [
+        [KeyboardButton(text="📱 Моя Панель (Mini App)", web_app=WebAppInfo(url=url))],
         [KeyboardButton(text="👤 Управление пользователями")],
         [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="👁 Контроль Смены")],
         [KeyboardButton(text="🌊 Мониторинг моря"), KeyboardButton(text="🚐 Мониторинг суши")],

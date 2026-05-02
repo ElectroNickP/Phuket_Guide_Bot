@@ -3,6 +3,7 @@ from aiogram import Router, types, F, Bot
 from aiogram.filters import CommandStart, Command
 from loguru import logger
 from utils.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
+from utils.auth_tokens import generate_auth_token
 from config import config
 from sqlalchemy import select
 from database.db import AsyncSessionLocal, update_user_activity
@@ -99,10 +100,13 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
             is_super_adm = imp_user.get("role") == UserRole.SUPER_ADMIN
             is_any_admin = is_super_adm or imp_user.get("role") in [UserRole.ADMIN, UserRole.HEAD_OF_GUIDE, UserRole.HOT_LINE, UserRole.PIER_MANAGER]
             
+            # Generate token for WebApp
+            auth_token = generate_auth_token(message.from_user.id, config.BOT_TOKEN.get_secret_value())
+            
             if is_any_admin:
-                kb = get_admin_menu_keyboard(is_super_admin=is_super_adm)
+                kb = get_admin_menu_keyboard(is_super_admin=is_super_adm, auth_token=auth_token)
             else:
-                kb = get_main_menu_keyboard(role=imp_user.get("role"))
+                kb = get_main_menu_keyboard(role=imp_user.get("role"), auth_token=auth_token)
                 
             await message.answer(
                 f"🎭 <b>РЕЖИМ ИМИТАЦИИ</b>\n"
@@ -113,6 +117,9 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
             )
             return
 
+        # Generate token for WebApp
+        auth_token = generate_auth_token(message.from_user.id, config.BOT_TOKEN.get_secret_value())
+
         if is_admin:
             logger.debug("Calling get_admin_menu_keyboard")
             # Fetch user from DB to get their specialized role if any
@@ -121,7 +128,7 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
                 result = await session.execute(query)
                 db_user = result.scalar_one_or_none()
                 role = db_user.role if db_user else None
-            kb = get_admin_menu_keyboard(is_super_admin=is_pankonick, role=role)
+            kb = get_admin_menu_keyboard(is_super_admin=is_pankonick, role=role, auth_token=auth_token)
         else:
             logger.debug("Calling get_main_menu_keyboard")
             # Fetch user from DB to get their role
@@ -130,7 +137,7 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
                 result = await session.execute(query)
                 db_user = result.scalar_one_or_none()
                 role = db_user.role if db_user else None
-            kb = get_main_menu_keyboard(role=role)
+            kb = get_main_menu_keyboard(role=role, auth_token=auth_token)
         
         welcome_text = (
             f"🌴 <b>Best Guide — Твой цифровой помощник на Пхукете</b>\n\n"
