@@ -135,6 +135,37 @@ class SaleItem(Base):
     
     sale = relationship("Sale", back_populates="items")
 
+# ─── TOURIST ONLINE ORDERS ──────────────────────────────────────────────
+
+class TouristOrder(Base):
+    __tablename__ = 'tourist_orders'
+    id = Column(Integer, primary_key=True)
+    telegram_id = Column(Integer) # Optional if from bot
+    pier = Column(String) # Optional context
+    
+    total_amount = Column(Integer, nullable=False)
+    status = Column(String, default="pending") # "pending", "paid", "failed"
+    
+    payment_reference = Column(String) # NSPK payment_reference
+    payment_link = Column(String) # Final pay link
+    
+    created_at = Column(DateTime, default=get_phuket_now)
+    paid_at = Column(DateTime)
+    
+    items = relationship("TouristOrderItem", back_populates="order")
+
+class TouristOrderItem(Base):
+    __tablename__ = 'tourist_order_items'
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey('tourist_orders.id'))
+    
+    product_name = Column(String, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    price_per_unit = Column(Integer, nullable=False)
+    total_price = Column(Integer, nullable=False)
+    
+    order = relationship("TouristOrder", back_populates="items")
+
 # ─── OPERATIONAL LOGS (AI REPORTS) ──────────────────────────────────────
 class OperationalReport(Base):
     __tablename__ = 'operational_reports'

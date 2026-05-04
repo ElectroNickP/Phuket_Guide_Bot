@@ -67,6 +67,10 @@ async def run_flow(flow: list[tuple]):
                         index = step[1]
                         await client.click(index)
                         
+                    elif action == "switch_bot":
+                        username = step[1]
+                        client.set_bot(username)
+                        
                     elif action == "sleep":
                         seconds = float(step[1])
                         logger.debug(f"Sleeping {seconds}s...")

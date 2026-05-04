@@ -5,9 +5,12 @@ from pydantic import SecretStr
 
 class Settings(BaseSettings):
     BOT_TOKEN: SecretStr
+    BOT_TOKEN_STAFF: SecretStr | None = None
+    BOT_TOKEN_TOURIST: SecretStr | None = None
     ADMIN_ID: int
     ADMIN_IDS: str = ""  # Optional: additional admins, comma-separated (e.g. "123456,789012")
     ADMIN_USERNAMES: str = ""  # Optional: admin usernames, comma-separated (e.g. "@user1, @user2")
+    SHARED_SECRET_KEY: str = "" # For cross-bot auth token verification
     DEFAULT_SPREADSHEET_ID: str = "1VzzL9hKRSwqga1nsjJ9Df2AlkSBVw_6zRorXDy_MURs"
     DEFAULT_SEA_SPREADSHEET_ID: str = "1wtSeYmTnwcC5d-AxNt3zLaMZhe5-mRXfYJ-gm4nJQ7E"
     STORE_SPREADSHEET_ID: str = "19bI7_HT8oxpS_tQBlMXTn3xooqdnn5t6aDRjiwEbYLM"
@@ -19,9 +22,14 @@ class Settings(BaseSettings):
     REPORT_TOPIC_ID: int = 6 # Backward compatibility or default
     WAKEUP_LOG_TOPIC_ID: int = 45
     HELP_TOPIC_ID: int = 102
-    SOS_NOTIFY_TARGET: str = "@HOT_LINE" # Who to tag in SOS messages
+    BOT_MODE: str = "staff" # "tourist" or "staff"
     ACTION_LOG_CHANNEL_ID: int = -1003831769874
     ACTION_LOG_ENABLED: bool = True
+    
+    # Component toggles (for dual-deployment)
+    ENABLE_SCHEDULER: bool = True
+    ENABLE_WEBAPP: bool = True
+    ENABLE_TUNNEL: bool = True
     
     # Duplicate report destination for land programs
     LAND_REPORT_DUPLICATE_GROUP_ID: int | None = -1003777152879

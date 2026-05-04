@@ -1,12 +1,36 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from config import config
 
+def get_tourist_menu_keyboard(auth_token: str | None = None):
+    url = f"{config.WEBAPP_URL}/tourist"
+    if auth_token:
+        url += f"?token={auth_token}"
+        
+    keyboard = [
+        [KeyboardButton(text="🛍 Buddy shop", web_app=WebAppInfo(url=url))],
+        [KeyboardButton(text="📦 Заказать в чате")],
+        [KeyboardButton(text="🆘 Поддержка")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
 def get_main_menu_keyboard(role: str | None = None, auth_token: str | None = None):
+    # IF BOT_MODE is tourist, ignore EVERYTHING and show tourist menu
+    if config.BOT_MODE == "tourist":
+        return get_tourist_menu_keyboard(auth_token=auth_token)
+
+    # Original staff-aware logic for other modes
+    from database.models import UserRole
+    staff_roles = (UserRole.GUIDE, UserRole.PIER_MANAGER, UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE, UserRole.HOT_LINE)
+    
+    if not role or role not in staff_roles:
+        return get_tourist_menu_keyboard(auth_token=auth_token)
+
     url = f"{config.WEBAPP_URL}/"
     if auth_token:
         url += f"?token={auth_token}"
         
     keyboard = [
+        [KeyboardButton(text="🛍 Buddy shop", web_app=WebAppInfo(url=f"{config.WEBAPP_URL}/tourist?token={auth_token}" if auth_token else f"{config.WEBAPP_URL}/tourist"))],
         [KeyboardButton(text="📱 Моя Панель (Mini App)", web_app=WebAppInfo(url=url))],
         [KeyboardButton(text="📅 Моё расписание"), KeyboardButton(text="🌊 План на море")],
         [KeyboardButton(text="🚐 План на суше"), KeyboardButton(text="👤 Мой статус")],
@@ -15,18 +39,23 @@ def get_main_menu_keyboard(role: str | None = None, auth_token: str | None = Non
         [KeyboardButton(text="📚 Библиотека гида")]
     ]
     
-    from database.models import UserRole
     if role in (UserRole.PIER_MANAGER, UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE):
-        keyboard.insert(1, [KeyboardButton(text="⚓️ Панель Пирс-Менеджера")])
+        keyboard.insert(2, [KeyboardButton(text="⚓️ Панель Пирс-Менеджера")])
         
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 def get_admin_menu_keyboard(is_super_admin: bool = False, role: str | None = None, auth_token: str | None = None):
+    # IF BOT_MODE is tourist, ignore EVERYTHING and show tourist menu
+    if config.BOT_MODE == "tourist":
+        return get_tourist_menu_keyboard(auth_token=auth_token)
+
     url = f"{config.WEBAPP_URL}/"
+    tourist_url = f"{config.WEBAPP_URL}/tourist"
     if auth_token:
         url += f"?token={auth_token}"
         
     keyboard = [
+        [KeyboardButton(text="🛍 Buddy shop", web_app=WebAppInfo(url=f"{config.WEBAPP_URL}/tourist?token={auth_token}" if auth_token else f"{config.WEBAPP_URL}/tourist"))],
         [KeyboardButton(text="📱 Моя Панель (Mini App)", web_app=WebAppInfo(url=url))],
         [KeyboardButton(text="👤 Управление пользователями")],
         [KeyboardButton(text="👁 Мониторинг гидов"), KeyboardButton(text="👁 Контроль Смены")],
@@ -39,7 +68,7 @@ def get_admin_menu_keyboard(is_super_admin: bool = False, role: str | None = Non
     
     from database.models import UserRole
     if role in (UserRole.PIER_MANAGER, UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE) or is_super_admin:
-        keyboard.insert(1, [KeyboardButton(text="⚓️ Панель Пирс-Менеджера")])
+        keyboard.insert(2, [KeyboardButton(text="⚓️ Панель Пирс-Менеджера")])
     if is_super_admin:
         keyboard.append([KeyboardButton(text="⏱ Интервал"), KeyboardButton(text="📋 Логи")])
         keyboard.append([KeyboardButton(text="🔗 Сменить таблицу"), KeyboardButton(text="🔗 Сменить таблицу (Море)")])

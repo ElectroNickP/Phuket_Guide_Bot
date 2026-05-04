@@ -13,7 +13,7 @@ echo "Starting cloudflared tunnel monitor..."
 # Function to run cloudflared
 run_tunnel() {
     echo "Launching cloudflared..."
-    cloudflared tunnel --no-autoupdate --url http://bot:8080 >> $LOG_FILE 2>&1
+    cloudflared tunnel --no-autoupdate --url http://bot_tourist:8080 >> $LOG_FILE 2>&1
 }
 
 # Start tunnel in background and restart if it crashes

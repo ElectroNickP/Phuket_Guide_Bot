@@ -8,7 +8,7 @@ from aiogram.methods import SendMessage, EditMessageText, SendPhoto, SendDocumen
 from aiogram.methods.base import TelegramMethod
 from config import config
 from database.db import init_db
-from handlers import common, guide, admin, feedback, reports, help as help_handler, pier_manager, ai_parser
+from handlers import common, guide, admin, feedback, reports, help as help_handler, pier_manager, ai_parser, tourist_shop
 from services.scheduler import setup_scheduler
 from utils.logging_middleware import LoggingMiddleware
 from loguru import logger
@@ -145,11 +145,13 @@ async def main():
     logger.info("=" * 60)
 
     # Setup Scheduler
-    await setup_scheduler(bot)
+    if config.ENABLE_SCHEDULER:
+        await setup_scheduler(bot)
 
     # Start Tunnel Monitor (Dynamic URL)
-    from services.tunnel_service import tunnel_monitor_service
-    await tunnel_monitor_service.start()
+    if config.ENABLE_TUNNEL:
+        from services.tunnel_service import tunnel_monitor_service
+        await tunnel_monitor_service.start()
 
 
     # ─── Register Global Error Handler ───────────────────────────────────────
@@ -161,6 +163,7 @@ async def main():
 
     # ─── Register Routers ─────────────────────────────────────────────────────
     dp.include_router(common.router)
+    dp.include_router(tourist_shop.router)
     dp.include_router(admin.admin_router)
     dp.include_router(pier_manager.router)
     dp.include_router(feedback.router)
@@ -170,19 +173,22 @@ async def main():
     dp.include_router(ai_parser.router)
 
     # Start WebApp Backend
-    from services.webapp import setup_webapp
-    webapp_runner = await setup_webapp(bot)
+    webapp_runner = None
+    if config.ENABLE_WEBAPP:
+        from services.webapp import setup_webapp
+        webapp_runner = await setup_webapp(bot)
 
     # Start Polling
-    logger.info("Bot started and polling...")
+    logger.info(f"Bot (@{config.BOT_TOKEN.get_secret_value().split(':')[0]}) started and polling (Mode: {config.BOT_MODE})...")
     try:
         await dp.start_polling(bot)
     except Exception as e:
         logger.exception(f"Fatal error in polling: {e}")
     finally:
         await bot.session.close()
-        await webapp_runner.cleanup()
-        logger.info("Bot & WebApp stopped.")
+        if webapp_runner:
+            await webapp_runner.cleanup()
+        logger.info(f"Bot ({config.BOT_MODE}) stopped.")
 
 
 if __name__ == "__main__":

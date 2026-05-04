@@ -12,8 +12,9 @@ from aiogram import Bot
 from config import config
 from services.google_sheets import google_sheets
 from database.db import AsyncSessionLocal
-from database.models import User, ReportSubmission, UserRole, Product, CashSession, Sale, SaleItem
+from database.models import User, ReportSubmission, UserRole, Product, CashSession, Sale, SaleItem, TouristOrder, TouristOrderItem
 from services.cash_service import cash_service
+from services.payment_service import NSPKService
 from utils.auth_tokens import verify_auth_token
 from sqlalchemy import select, update
 from datetime import datetime
@@ -64,7 +65,7 @@ async def get_user_role(telegram_id: int = None, username: str = None) -> str | 
         return result.scalars().first()
         
 async def get_authorized_user(request):
-    """Unified user detection via initData OR Token fallback."""
+    """Unified user detection via initData OR Token fallback. Supports multiple bots."""
     init_data = request.query.get('initData')
     token = request.query.get('token')
     
@@ -75,16 +76,25 @@ async def get_authorized_user(request):
             token = token or body.get('token')
         except: pass
 
-    # 1. Standard Telegram Auth
-    user_data = validate_webapp_data(init_data, config.BOT_TOKEN.get_secret_value())
-    if user_data and user_data.get('id'):
-        return int(user_data['id']), user_data.get('username')
+    # Collect all possible tokens
+    tokens_to_try = [config.BOT_TOKEN.get_secret_value()]
+    if config.BOT_TOKEN_STAFF:
+        tokens_to_try.append(config.BOT_TOKEN_STAFF.get_secret_value())
+    if config.BOT_TOKEN_TOURIST:
+        tokens_to_try.append(config.BOT_TOKEN_TOURIST.get_secret_value())
+    
+    # 1. Standard Telegram Auth (Try all tokens)
+    for bot_token in tokens_to_try:
+        user_data = validate_webapp_data(init_data, bot_token)
+        if user_data and user_data.get('id'):
+            return int(user_data['id']), user_data.get('username')
 
-    # 2. Token Fallback (for buggy clients like tdesktop)
+    # 2. Token Fallback (Try all tokens)
     if token:
-        user_id = verify_auth_token(token, config.BOT_TOKEN.get_secret_value())
-        if user_id:
-            return user_id, None
+        for bot_token in tokens_to_try:
+            user_id = verify_auth_token(token, bot_token)
+            if user_id:
+                return user_id, None
             
     return None, None
 
@@ -397,6 +407,149 @@ async def handle_pier_report(request):
     except Exception as e:
         logger.exception("Error fetching report")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+# ─── TOURIST API ────────────────────────────────────────────────────────
+
+@routes.get('/api/tourist/products')
+async def tourist_products(request):
+    """Public endpoint for browsing products"""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Product).where(Product.is_active == True).order_by(Product.category)
+        )
+        products = result.scalars().all()
+        
+        data = []
+        for p in products:
+            data.append({
+                "id": p.id,
+                "name": p.name,
+                "price": p.sale_price,
+                "category": p.category
+            })
+            
+        return web.json_response({"status": "success", "products": data})
+
+@routes.post('/api/tourist/checkout')
+async def tourist_checkout(request):
+    """Create order and generate NSPK payment link. Supports both 'qty' and 'quantity'."""
+    try:
+        data = await request.json()
+        items = data.get('items', [])
+        telegram_id = data.get('telegram_id')
+        pier = data.get('pier', 'Yamu')
+        
+        # Internal normalization: Ensure both 'qty' and 'quantity' work
+        for i in items:
+            if 'quantity' in i and 'qty' not in i:
+                i['qty'] = i['quantity']
+            elif 'qty' in i and 'quantity' not in i:
+                i['quantity'] = i['qty']
+        
+        if not items:
+            return web.json_response({"status": "error", "message": "Cart is empty"}, status=400)
+            
+        try:
+            total_thb = sum(i['price'] * i.get('quantity', i.get('qty', 1)) for i in items)
+        except KeyError as e:
+            return web.json_response({"status": "error", "message": f"Missing field in cart items: {e}"}, status=400)
+
+        # 1. Initialize Payment
+        nspk = NSPKService()
+        pay_info = nspk.create_order(total_thb)
+        
+        if not pay_info:
+            return web.json_response({"status": "error", "message": "Payment gateway error"}, status=500)
+            
+        async with AsyncSessionLocal() as session:
+            # 2. Create Order
+            order = TouristOrder(
+                telegram_id=telegram_id,
+                pier=pier,
+                total_amount=total_thb,
+                status="pending",
+                payment_reference=pay_info['reference'],
+                payment_link=pay_info['link']
+            )
+            session.add(order)
+            await session.flush()
+            
+            # 3. Add Items
+            for i in items:
+                qty = i.get('quantity', i.get('qty', 1))
+                oi = TouristOrderItem(
+                    order_id=order.id,
+                    product_name=i['name'],
+                    quantity=qty,
+                    price_per_unit=i['price'],
+                    total_price=i['price'] * qty
+                )
+                session.add(oi)
+            
+            await session.commit()
+            
+            logger.info(f"Tourist Order #{order.id} created. Link: {pay_info['link']}")
+            
+            return web.json_response({
+                "status": "success",
+                "order_id": order.id,
+                "pay_url": pay_info['link'],
+                "total_rub": pay_info['amount_rub'],
+                "total_thb": total_thb
+            })
+            
+    except Exception as e:
+        logger.error(f"Checkout error: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+@routes.get('/api/tourist/order/{id}')
+async def tourist_order_status(request):
+    order_id = request.match_info['id']
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(TouristOrder).where(TouristOrder.id == order_id))
+        order = result.scalar_one_or_none()
+        if not order:
+            return web.json_response({"status": "error", "message": "Order not found"}, status=404)
+            
+        return web.json_response({
+            "status": "success",
+            "order": {
+                "id": order.id,
+                "status": order.status,
+                "amount": order.total_amount,
+            }
+        })
+
+@routes.get('/tourist')
+async def tourist_page(request):
+    """Serve the tourist storefront"""
+    static_path = get_static_path()
+    file_path = os.path.join(static_path, 'tourist_shop.html')
+    if os.path.exists(file_path):
+        return web.FileResponse(file_path)
+    return web.Response(text="Tourist store not found", status=404)
+
+@routes.get('/api/products/active')
+async def get_active_products(request):
+    """Returns list of active products for the shop"""
+    try:
+        from services.cash_service import cash_service
+        products = await cash_service.get_active_products()
+        return web.json_response({
+            "status": "success",
+            "data": [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "sale_price": p.sale_price,
+                    "category": p.category
+                } for p in products
+            ]
+        })
+    except Exception as e:
+        logger.error(f"Error fetching active products: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
 
 async def setup_webapp(bot: Bot) -> web.AppRunner:
     """Configures and runs the aiohttp web app asynchronously"""

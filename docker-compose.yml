@@ -7,8 +7,9 @@ services:
       - redis_data:/data
     command: redis-server --save 60 1 --loglevel warning
 
-  bot:
+  bot_staff:
     build: .
+    container_name: best_staff_bot
     volumes:
       - .:/app
       - ./data:/app/data
@@ -17,6 +18,33 @@ services:
       - tunnel_shared:/app/shared
     env_file:
       - .env
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN_STAFF}
+      - BOT_MODE=staff
+      - ENABLE_SCHEDULER=False
+      - ENABLE_WEBAPP=False
+      - ENABLE_TUNNEL=False
+    restart: always
+    depends_on:
+      - redis
+
+  bot_tourist:
+    build: .
+    container_name: best_tourist_bot
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./google service account:/app/google service account
+      - tunnel_shared:/app/shared
+    env_file:
+      - .env
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN_TOURIST}
+      - BOT_MODE=tourist
+      - ENABLE_SCHEDULER=True
+      - ENABLE_WEBAPP=True
+      - ENABLE_TUNNEL=True
     restart: always
     ports:
       - "8080:8080"
@@ -27,13 +55,11 @@ services:
     build:
       context: ./docker/tunnel
     volumes:
-
       - tunnel_shared:/app/shared
     restart: always
     depends_on:
-      - bot
+      - bot_tourist
 
 volumes:
   redis_data:
   tunnel_shared:
-

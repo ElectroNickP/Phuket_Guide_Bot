@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Phuket Buddy Shop</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/css/tourist.css?v=2">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+
+    <!-- LOADER -->
+    <div id="loader-overlay" style="position:fixed; inset:0; background:#03045e; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; transition: opacity 0.5s;">
+        <div style="width:50px; height:50px; border:4px solid rgba(255,255,255,0.1); border-top-color:#ffb703; border-radius:50%; animation: spin 1s linear infinite;"></div>
+        <div style="color:white; margin-top:20px; font-weight:700; letter-spacing:1px;">BUDDY SHOP...</div>
+    </div>
+
+    <!-- HEADER -->
+    <header class="shop-header">
+        <div class="shop-logo">
+            <i class="fas fa-umbrella-beach"></i>
+            Phuket Buddy Shop
+        </div>
+        <div class="shop-tagline">Everything you need for a perfect day at sea</div>
+    </header>
+
+    <!-- CATEGORIES -->
+    <div class="categories-container" id="category-pills">
+        <div class="cat-chip active" data-cat="all" onclick="filterCategory('all', this)">
+            <i class="fas fa-th-large"></i> All
+        </div>
+        <!-- Dynamic categories -->
+    </div>
+
+    <!-- MAIN GRID -->
+    <main class="products-wrapper">
+        <div class="section-title">
+            <span id="current-cat-title">Popular Items</span>
+            <span style="font-size:12px; color:var(--sea-blue); font-weight:600;">Yamu Pier Stock</span>
+        </div>
+        
+        <div class="products-grid" id="product-grid">
+            <!-- Product cards injected -->
+        </div>
+    </main>
+
+    <!-- BOTTOM NAV / CART BAR -->
+    <nav class="bottom-nav" id="bottom-bar" style="display:none;">
+        <div style="position:relative; display:flex; align-items:center; gap:12px;">
+            <div style="font-size:24px;"><i class="fas fa-shopping-bag"></i></div>
+            <div class="cart-count" id="cart-count-badge">0</div>
+            <div>
+                <div style="font-size:11px; opacity:0.7; font-weight:700;">YOUR TOTAL</div>
+                <div style="font-size:18px; font-weight:900;" id="cart-total-display">0฿</div>
+            </div>
+        </div>
+        
+        <button class="checkout-btn" onclick="openCart()">
+            Checkout <i class="fas fa-arrow-right"></i>
+        </button>
+    </nav>
+
+    <!-- CART MODAL -->
+    <div class="modal-overlay" id="cart-modal" onclick="closeCart()">
+        <div class="modal-sheet" onclick="event.stopPropagation()">
+            <div style="width:40px; height:4px; background:#ddd; border-radius:2px; margin:0 auto 20px;"></div>
+            
+            <h2 style="font-size:24px; font-weight:900; color:var(--ocean); margin-bottom:20px; display:flex; align-items:center; gap:12px;">
+                <i class="fas fa-shopping-cart"></i> My Order
+            </h2>
+            
+            <div id="cart-items-list" style="max-height:40vh; overflow-y:auto; margin-bottom:20px;">
+                <!-- Cart items -->
+            </div>
+            
+            <div style="background:#f8f9fa; border-radius:20px; padding:20px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:15px; align-items:baseline;">
+                    <span style="font-weight:700; color:#666;">Total to pay</span>
+                    <span style="font-size:28px; font-weight:900; color:var(--ocean);" id="modal-total">0฿</span>
+                </div>
+                
+                <p style="font-size:12px; color:#888; text-align:center; margin-bottom:20px;">
+                    Secure payment via <b>NSPK (PromptPay)</b><br>
+                    Order will be delivered to your guide at Yamu Pier.
+                </p>
+                
+                <button id="pay-btn" onclick="processCheckout()" style="width:100%; padding:18px; border-radius:18px; border:none; background:var(--bg-gradient); color:white; font-size:18px; font-weight:800; cursor:pointer; box-shadow:0 10px 20px rgba(3,4,94,0.2);">
+                    PAY & FINALIZE
+                </button>
+            </div>
+            
+            <button onclick="closeCart()" style="width:100%; margin-top:15px; border:none; background:none; color:var(--sea-blue); font-weight:700; font-size:14px; cursor:pointer;">
+                Continue Shopping
+            </button>
+        </div>
+    </div>
+
+    <!-- SUCCESS MODAL -->
+    <div class="modal-overlay" id="success-modal">
+        <div class="modal-sheet" style="text-align:center; padding:40px 20px;">
+            <div style="width:80px; height:80px; background:#dcfce7; color:#22c55e; border-radius:40px; display:flex; align-items:center; justify-content:center; margin:0 auto 20px; font-size:40px;">
+                <i class="fas fa-check"></i>
+            </div>
+            <h2 style="font-weight:900; color:var(--ocean); font-size:24px; margin-bottom:10px;">Payment Success!</h2>
+            <p style="color:#666; margin-bottom:30px;">Your order has been received. Please show your confirmation to the pier manager or your guide.</p>
+            <button onclick="Telegram.WebApp.close()" style="width:100%; padding:15px; border-radius:15px; border:none; background:var(--ocean); color:white; font-weight:800;">Close Mini App</button>
+        </div>
+    </div>
+
+    <style>
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        .cart-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .ci-main { flex: 1; margin-right: 15px; }
+        .ci-name { font-weight: 700; font-size: 15px; color: var(--ocean); }
+        .ci-price { font-size: 13px; color: #666; margin-top: 2px; }
+        
+        .qty-ctrl { display: flex; align-items: center; gap: 12px; }
+        .q-btn { width: 32px; height: 32px; border-radius: 10px; border: 1.5px solid #eee; background: white; font-weight: 700; cursor: pointer; }
+        .q-val { font-weight: 800; min-width: 20px; text-align: center; }
+    </style>
+
+    <script src="/static/js/tourist.js?v=2"></script>
+</body>
+</html>

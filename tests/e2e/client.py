@@ -9,6 +9,10 @@ class TestClient:
         self.client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
         self.bot_username = BOT_USERNAME
 
+    def set_bot(self, username: str):
+        logger.info(f"Switching target bot to: {username}")
+        self.bot_username = username
+
     async def connect(self):
         logger.info("Connecting to Telegram...")
         await self.client.start()
