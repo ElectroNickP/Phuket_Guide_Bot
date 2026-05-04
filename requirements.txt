@@ -14,3 +14,6 @@ pytest
 pytest_asyncio==0.23.5.post1
 aiohttp==3.9.3
 aiohttp-cors==0.7.0
+openai>=1.0.0
+alembic
+telethon

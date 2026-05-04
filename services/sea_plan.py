@@ -14,6 +14,34 @@ from database.dto import GuestDTO, GuideDTO, LandPlanDTO, SeaPlanDTO, ProgramDTO
 from utils.time import is_time_format
 
 class SeaPlanService:
+    # Default column mapping (0-indexed). Override via _detect_columns_from_header().
+    DEFAULT_COLUMN_MAP = {
+        "date": 0,
+        "thai_guide": 1,
+        "voucher": 2,
+        "pickup": 3,
+        "program": 4,
+        "pax": 5,
+        "room": 6,
+        "guide": 7,
+        "phone": 8,
+        "adults": 9,
+        "children": 10,
+        "infants": 11,
+        "pier": 13,
+        "cot": 14,
+        "boat": 15,
+    }
+
+    # Keywords used for auto-detection from header row
+    _HEADER_KEYWORDS = {
+        "program": ["program", "программа", "tour"],
+        "pax": ["pax", "passengers", "паксы"],
+        "guide": ["guide", "гид"],
+        "pier": ["pier", "пирс"],
+        "boat": ["boat", "лодка", "vessel"],
+    }
+
     def __init__(self):
         self.scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -29,13 +57,28 @@ class SeaPlanService:
         self._sheet_cache: Dict[Tuple[str, str], Tuple[float, List[List[str]]]] = {} # (sheet_id, worksheet_name) -> (timestamp, data)
         self._worksheets_cache = {} # {sheet_id: (timestamp, dict {title: worksheet})}
         self._cache_ttl = 300 # 5 minutes
+        self.col = dict(self.DEFAULT_COLUMN_MAP)  # Active column map (mutable copy)
+
+    def _detect_columns_from_header(self, header_row: list) -> None:
+        """Auto-detect column positions from header row keywords.
+        Falls back to DEFAULT_COLUMN_MAP for any column not found."""
+        if not header_row:
+            return
+        header_lower = [str(h).strip().lower() for h in header_row]
+        for col_key, keywords in self._HEADER_KEYWORDS.items():
+            for idx, cell in enumerate(header_lower):
+                if any(kw in cell for kw in keywords):
+                    if self.col.get(col_key) != idx:
+                        logger.info(f"Column auto-detect: '{col_key}' → index {idx} (was {self.col.get(col_key)})")
+                    self.col[col_key] = idx
+                    break
 
     async def get_spreadsheet_id(self):
         """Fetches Sea Plan spreadsheet ID from DB or config"""
         async with AsyncSessionLocal() as session:
             query = select(AppSettings).where(AppSettings.key == "sea_spreadsheet_id")
             result = await session.execute(query)
-            setting = result.scalar_one_or_none()
+            setting = result.scalars().first()
             return setting.value if setting else config.DEFAULT_SEA_SPREADSHEET_ID
 
     async def get_spreadsheet(self):
@@ -74,20 +117,29 @@ class SeaPlanService:
         return wdict
 
     async def get_date_worksheet(self, target_date: datetime.date):
-        """Finds worksheet matching the date (e.g. '10.03')"""
+        """Finds worksheet matching the date (e.g. '10.03' or '3.05')"""
         spreadsheet = await self.get_spreadsheet()
         if not spreadsheet:
             return None
-        date_str = target_date.strftime("%d.%m")
+        
+        # Try different formats: "03.05", "3.05", "3.5", "03.5"
+        date_formats = [
+            target_date.strftime("%d.%m"),
+            f"{target_date.day}.{target_date.strftime('%m')}",
+            f"{target_date.day}.{target_date.month}",
+            f"{target_date.strftime('%d')}.{target_date.month}"
+        ]
+        
         try:
             wdict = await self._get_cached_worksheets_dict(spreadsheet)
-            if date_str in wdict:
-                return wdict[date_str]
-            else:
-                logger.warning(f"Worksheet {date_str} not found in Sea Plan.")
-                return None
+            for d_str in date_formats:
+                if d_str in wdict:
+                    return wdict[d_str]
+            
+            logger.warning(f"Worksheet for {target_date} (tried {date_formats}) not found in Sea Plan.")
+            return None
         except Exception as e:
-            logger.error(f"Error fetching worksheet {date_str}: {e}")
+            logger.error(f"Error fetching worksheet for {target_date}: {e}")
             return None
 
     async def _get_worksheet_values(self, target_date: datetime.date) -> List[List[str]]:
@@ -123,16 +175,19 @@ class SeaPlanService:
     def _validate_sheet_columns(self, header_row: list):
         """
         Defensive check: warns if expected column positions appear empty.
-        Expected (0-indexed): 4=program, 5=pax, 7=guide, 13=pier, 15=boat
+        Also triggers auto-detection of column positions from headers.
         """
-        expected = {4: "program", 5: "pax", 7: "guide", 13: "pier", 15: "boat"}
         if not header_row:
             logger.warning("Sea Plan sheet header row is empty — cannot validate columns.")
             return
-        for idx, name in expected.items():
-            if idx >= len(header_row):
+        # Try to auto-detect columns from header keywords
+        self._detect_columns_from_header(header_row)
+        # Validate that key columns are within range
+        for name in ["program", "pax", "guide", "pier", "boat"]:
+            idx = self.col.get(name)
+            if idx is not None and idx >= len(header_row):
                 logger.warning(
-                    f"Sea Plan column {idx} (expected: '{name}') is out of range. "
+                    f"Sea Plan column {idx} ('{name}') is out of range. "
                     "Columns may have shifted — verify sheet structure!"
                 )
 
@@ -155,36 +210,57 @@ class SeaPlanService:
         current_pier = None
         current_thai_guide = None
         
-        for i, row in enumerate(all_values):
-            if i > 250 and len(row) > 4:
-                row_prog_raw = row[4].strip()
-                if row_prog_raw == "TOTAL" or row_prog_raw.startswith("JOB ORDER"):
+        # Column indices (from configurable map)
+        C_PROG = self.col["program"]
+        C_PAX = self.col["pax"]
+        C_GUIDE = self.col["guide"]
+        C_PIER = self.col["pier"]
+        C_BOAT = self.col["boat"]
+        C_THAI = self.col["thai_guide"]
+        C_DATE = self.col["date"]
+
+        for i, row_raw in enumerate(all_values):
+            # Pad the row to avoid IndexError due to Google Sheets truncating trailing empty columns
+            max_needed = max(C_PROG, C_PAX, C_GUIDE, C_PIER, C_BOAT, C_THAI, C_DATE)
+            row = list(row_raw)
+            while len(row) <= max_needed:
+                row.append("")
+
+            if i > 250 and len(row) > C_PROG:
+                row_prog_raw = row[C_PROG].strip()
+                if row_prog_raw == "TOTAL" or row_prog_raw == "TOTALS" or row_prog_raw.startswith("JOB ORDER"):
                     break
-
-            if len(row) < 16: continue
             
-            row_boat = row[15].strip()
-            row_pier = row[13].strip()
-            row_thai = row[1].strip()
-            row_date = row[0].strip() or target_date.strftime("%d.%m")
+            row_boat = row[C_BOAT].strip()
+            row_pier = row[C_PIER].strip()
+            row_thai = row[C_THAI].strip()
+            row_date = row[C_DATE].strip() or target_date.strftime("%d.%m")
 
-            if "COMEBACK BOATS" in row[4].strip().upper():
+            if "COMEBACK BOATS" in row[C_PROG].strip().upper():
                 continue
 
             if row_boat:
                 current_boat = row_boat
+            if row_pier:
+                if current_pier and current_pier != row_pier and not row_boat:
+                    current_boat = None # Force reset if pier changes
                 current_pier = row_pier
+            if row_thai:
                 current_thai_guide = row_thai
             
+            # If no boat is assigned yet, but we have a pier or program, group them under "TBA"
             if not current_boat:
-                continue
+                if current_pier or row[C_PROG].strip():
+                    current_boat = "TBA"
+                else:
+                    continue
                 
             if filter_fn and not filter_fn(current_pier, current_boat, row):
                 continue
 
-            guide_str = row[7].strip()
-            prog_name = row[4].strip()
-            pax_str = row[5].strip()
+            guide_str = row[C_GUIDE].strip()
+            prog_name = row[C_PROG].strip()
+            pax_str = row[C_PAX].strip()
 
             if not prog_name and not guide_str:
                 continue
@@ -261,8 +337,9 @@ class SeaPlanService:
         """
         username_lower = username.lower()
         
+        C_GUIDE = self.col["guide"]
         def filter_guide(pier, boat, row):
-            guide_str = row[7].strip()
+            guide_str = row[C_GUIDE].strip()
             return f"@{username_lower}" in guide_str.lower()
 
         plans = await self._parse_sea_plan(target_date, filter_guide)

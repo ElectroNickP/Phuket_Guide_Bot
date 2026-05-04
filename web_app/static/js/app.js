@@ -1,520 +1,537 @@
-// Initialize Telegram WebApp
+/* ============================================
+   POS v2.0 — Professional Point-of-Sale Logic
+   ============================================ */
+
 const tg = window.Telegram.WebApp;
 
-// Global state
+// Global State
 let currentPier = new URLSearchParams(window.location.search).get('pier');
 const authToken = new URLSearchParams(window.location.search).get('token');
 let currentSession = null;
 let allProducts = [];
 let cart = [];
+let activeCategory = 'all';
 
-// Cross-browser UI popups
-function uiShowAlert(msg, callback) {
-    if (tg.platform && tg.platform !== "unknown") {
-        tg.showAlert(msg, callback);
-    } else {
-        alert(msg);
-        if (callback) callback();
-    }
-}
-
-function uiShowConfirm(msg, callback) {
-    if (tg.platform && tg.platform !== "unknown") {
-        tg.showConfirm(msg, callback);
-    } else {
-        const ok = confirm(msg);
-        setTimeout(() => callback(ok), 0);
-    }
-}
-
-// Diagnostics and Initialization
+// ===== INIT =====
 async function initializeApp() {
-    console.log("Starting WebApp initialization...");
     tg.ready();
     tg.expand();
 
-    // 1. Unified Authentication & Role Handling
     try {
-        const initResult = await apiRequest('/api/init');
-        if (initResult.status === "success") {
-            const user = initResult.data;
-            console.log("User initialized:", user);
+        const result = await apiRequest('/api/init');
+        if (result.status === 'success') {
+            const user = result.data;
+            currentPier = currentPier || user.pier;
+            
+            document.getElementById('greeting').innerText = `${currentPier || 'Pier'} POS`;
+            
+            const phuketDate = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Bangkok' });
+            document.getElementById('date-display').innerText = `${phuketDate} • ${user.name}`;
 
-            // Update UI
-            const greetingEl = document.getElementById('greeting');
-            if (greetingEl) greetingEl.innerText = `Привет, ${user.name}!`;
-
-            const debugEl = document.getElementById('debug-auth-info');
-            if (debugEl) {
-                const method = tg.initData ? "TG" : (authToken ? "Token" : "None");
-                debugEl.innerText = `Auth: ${method} | Role: ${user.role} | Pier: ${user.pier || '---'}`;
-            }
-
-            // 2. Routing
-            const isManager = ['pier_manager', 'admin', 'super_admin', 'head_of_guide'].includes(user.role);
-            if (isManager) {
-                currentPier = currentPier || user.pier;
-                if (currentPier) {
-                    console.log("Switching to Manager View for pier:", currentPier);
-                    initManagerView();
-                    return;
-                }
-            }
+            await Promise.all([
+                refreshSessionStatus(),
+                loadProducts(),
+                loadSeaPlan(),
+            ]);
         }
     } catch (e) {
-        console.warn("Init API failed, using fallback routing:", e);
+        console.error('Init failed:', e);
     }
 
-    // Default Fallback
-    if (currentPier) {
-        initManagerView();
-    } else {
-        loadSchedule();
+    // Hide loader
+    const loader = document.getElementById('loader-overlay');
+    if (loader) {
+        loader.classList.add('hide');
+        setTimeout(() => loader.style.display = 'none', 400);
     }
 }
 
-// Tab logic
-const tabBtns = document.querySelectorAll('.tab-btn');
-const tabContents = document.querySelectorAll('.tab-content');
-
-tabBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-        tabBtns.forEach(b => b.classList.remove('active'));
-        tabContents.forEach(c => c.style.display = 'none');
-        btn.classList.add('active');
-        const targetId = btn.getAttribute('data-target');
-        const targetEl = document.getElementById(targetId);
-        if (targetEl) targetEl.style.display = 'block';
-    });
-});
-
-// Utility for authorization
-function getInitData() {
-    return tg.initData || "";
-}
-
-// API Request Wrapper
+// ===== API =====
 async function apiRequest(endpoint, options = {}) {
-    const initData = getInitData();
-    
-    // Default options
-    const defaultOptions = {
-        method: 'GET',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    };
-    
-    // Merge options
-    const mergedOptions = { ...defaultOptions, ...options };
-    
-    // Add initData or Token to GET params or POST body
-    let url = endpoint;
-    const queryParams = new URLSearchParams();
-    if (getInitData()) queryParams.append('initData', getInitData());
-    if (authToken) queryParams.append('token', authToken);
+    const initData = tg.initData || '';
+    const qp = new URLSearchParams();
+    if (initData) qp.append('initData', initData);
+    if (authToken) qp.append('token', authToken);
 
-    if (mergedOptions.method === 'GET') {
-        const urlObj = new URL(url, window.location.origin);
-        queryParams.forEach((v, k) => urlObj.searchParams.append(k, v));
-        if (mergedOptions.data) {
-            Object.keys(mergedOptions.data).forEach(key => 
-                urlObj.searchParams.append(key, mergedOptions.data[key])
-            );
+    let url = endpoint;
+
+    if (options.method === 'POST') {
+        const body = options.body || {};
+        if (initData) body.initData = initData;
+        if (authToken) body.token = authToken;
+        options.body = JSON.stringify(body);
+        options.headers = { 'Content-Type': 'application/json' };
+    } else {
+        // GET — append params to URL
+        const urlObj = new URL(endpoint, window.location.origin);
+        qp.forEach((v, k) => urlObj.searchParams.append(k, v));
+        // Also append any extra data from options
+        if (options.data) {
+            Object.entries(options.data).forEach(([k, v]) => urlObj.searchParams.append(k, v));
         }
         url = urlObj.toString();
-    } else {
-        let bodyObj = mergedOptions.body || {};
-        if (typeof bodyObj === 'string') bodyObj = JSON.parse(bodyObj);
-        if (getInitData()) bodyObj.initData = getInitData();
-        if (authToken) bodyObj.token = authToken;
-        mergedOptions.body = JSON.stringify(bodyObj);
+        delete options.data;
     }
 
-    try {
-        const response = await fetch(url, mergedOptions);
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result.message || `HTTP ${response.status}`);
-        }
-        return result;
-    } catch (error) {
-        console.error(`API Error (${endpoint}):`, error);
-        throw error;
-    }
+    const resp = await fetch(url, options);
+    const json = await resp.json();
+    if (!resp.ok) throw new Error(json.message || `HTTP ${resp.status}`);
+    return json;
 }
 
-// --- Guide Logic ---
-async function loadSchedule() {
-    try {
-        const result = await apiRequest('/api/schedule');
-        const container = document.getElementById('schedule-cards');
-        const loader = document.getElementById('schedule-loading');
-        if (loader) loader.style.display = 'none';
-        
-        if (result.status === "success" && result.data && result.data.length > 0) {
-            if (!container) return;
-            container.innerHTML = "";
-            result.data.forEach(plan => {
-                const card = document.createElement("div");
-                card.className = "program-card";
-                card.innerHTML = `
-                    <h3>${plan.date} - ${plan.type === 'sea' ? '🌊 Sea' : '🚐 Land'}</h3>
-                    <div class="program-info"><span class="label">Program</span><span class="value">${plan.program}</span></div>
-                    ${plan.boat ? `<div class="program-info"><span class="label">Boat</span><span class="value">${plan.boat}</span></div>` : ''}
-                    <div class="program-info"><span class="label">P/U Time</span><span class="value">${plan.pickup_time || '---'}</span></div>
-                    <div class="program-info"><span class="label">Total guests</span><span class="value">${plan.pax}</span></div>
-                `;
-                container.appendChild(card);
-            });
-        } else if (container) {
-            container.innerHTML = `<div style="text-align:center; color: var(--hint-color); padding: 20px;">No schedule found for today or tomorrow.</div>`;
-        }
-    } catch (e) {
-        const loader = document.getElementById('schedule-loading');
-        if (loader) loader.innerText = "Error loading schedule.";
-    }
-}
-
-async function closeSession() {
-    if (!currentSession) return;
+// ===== TABS =====
+window.switchTab = function(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     
-    uiShowConfirm("Close this session?", async (ok) => {
-        if (!ok) return;
-        try {
-            const result = await apiRequest('/api/pier/session/close', {
-                method: 'POST',
-                body: { 
-                    session_id: currentSession.id,
-                    pier: currentPier 
-                }
-            });
-            if (result.status === "success") {
-                uiShowAlert("Session closed. Daily report finalized.");
-                refreshSessionStatus();
-            }
-        } catch (e) {
-            uiShowAlert(`Error: ${e.message}`);
-        }
-    });
-}
-
-async function sendReport(payload) {
-    tg.MainButton.showProgress();
-    try {
-        const result = await apiRequest('/api/report', {
-            method: 'POST',
-            body: { payload: payload }
-        });
-        if (result.status === "success") {
-            uiShowAlert('✅ Report sent successfully!', () => tg.close());
-        }
-    } catch (e) {
-        uiShowAlert(`❌ Error: ${e.message}`);
-    } finally {
-        tg.MainButton.hideProgress();
-    }
-}
-
-// Forms
-document.getElementById('start-report-form')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    sendReport({
-        type: 'start',
-        time: document.getElementById('start-time').value,
-        adults: document.getElementById('start-pax-adults').value,
-        children: document.getElementById('start-pax-children').value,
-        comment: document.getElementById('start-comment').value
-    });
-});
-
-document.getElementById('finish-report-form')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    sendReport({ type: 'finish', time: document.getElementById('finish-time').value });
-});
-
-// --- Manager Logic ---
-async function initManagerView() {
-    if (!currentPier) return;
+    document.getElementById(`tab-btn-${name}`).classList.add('active');
+    document.getElementById(`panel-${name}`).classList.add('active');
     
-    // Expand to full height and width
-    tg.ready();
-    tg.expand();
-    document.body.classList.add('manager-active');
-    
-    const tabs = document.querySelector('.tabs');
-    if (tabs) tabs.style.display = 'none';
-    
-    document.getElementById('schedule-tab').style.display = 'none';
-    document.getElementById('reports-tab').style.display = 'none';
-    document.getElementById('manager-view').style.display = 'block';
-    document.getElementById('manager-pier-title').innerText = `Pier: ${currentPier}`;
-    
-    await refreshSessionStatus();
-    await loadProducts();
-}
+    if (name === 'report') loadReport();
+    try { tg.HapticFeedback.selectionChanged(); } catch(e) {}
+};
 
+// ===== SESSION MANAGEMENT =====
 async function refreshSessionStatus() {
+    if (!currentPier) return;
     try {
         const result = await apiRequest('/api/pier/session', { data: { pier: currentPier } });
-        if (result.status === "success") {
-            const data = result.data;
-            
-            // Set Today's Date in specific format
-            const phuketDate = new Date().toLocaleDateString('ru-RU', { timeZone: 'Asia/Bangkok' });
-            
-            if (data.active) {
-                currentSession = data;
-                document.getElementById('session-status').innerText = "Session Open";
-                document.getElementById('session-status').className = "session-badge open";
-                document.getElementById('session-controls').style.display = 'none';
-                document.getElementById('cash-register').style.display = 'block';
-                
-                document.getElementById('report-container').style.display = 'block';
-                document.getElementById('close-session-btn').style.display = 'block';
-                document.getElementById('report-title').innerText = `📊 Daily Report: ${phuketDate} (Active)`;
-                updateReportDisplay(data.report);
-            } else {
-                currentSession = null;
-                document.getElementById('session-status').innerText = "Session Closed";
-                document.getElementById('session-status').className = "session-badge closed";
-                document.getElementById('session-controls').style.display = 'flex';
-                document.getElementById('cash-register').style.display = 'none';
-                
-                if (data.report) {
-                    document.getElementById('report-container').style.display = 'block';
-                    document.getElementById('close-session-btn').style.display = 'none';
-                    document.getElementById('report-title').innerText = `📊 Daily Report: ${phuketDate} (Final)`;
-                    updateReportDisplay(data.report);
-                } else {
-                    document.getElementById('report-container').style.display = 'none';
-                }
+        if (result.status !== 'success') return;
+        
+        const data = result.data;
+        currentSession = data.active ? data : null;
+        
+        const badge = document.getElementById('session-badge');
+        const openBtn = document.getElementById('session-controls');
+        const activeCtrl = document.getElementById('session-active-controls');
+        const posTabBtn = document.getElementById('tab-btn-pos');
+
+        if (currentSession) {
+            badge.textContent = 'OPEN';
+            badge.classList.remove('closed');
+            openBtn.style.display = 'none';
+            activeCtrl.style.display = 'block';
+            posTabBtn.style.opacity = '1';
+            posTabBtn.style.pointerEvents = 'auto';
+        } else {
+            badge.textContent = 'CLOSED';
+            badge.classList.add('closed');
+            openBtn.style.display = 'block';
+            activeCtrl.style.display = 'none';
+            posTabBtn.style.opacity = '0.4';
+            posTabBtn.style.pointerEvents = 'none';
+            switchTab('schedule');
+        }
+
+        // Update KPIs
+        if (data.report) {
+            const r = data.report;
+            document.getElementById('kpi-revenue').textContent = `${r.total_amount.toLocaleString()}฿`;
+            document.getElementById('kpi-txns').textContent = r.sales_count;
+            document.getElementById('kpi-cash').textContent = `${r.cash_amount.toLocaleString()}฿`;
+            document.getElementById('kpi-online').textContent = `${r.online_amount.toLocaleString()}฿`;
+        }
+    } catch (e) {
+        console.error('Session refresh failed:', e);
+    }
+}
+
+window.toggleSession = async function() {
+    const action = currentSession ? 'close' : 'open';
+    const msg = action === 'close'
+        ? 'Close shift and finalize report?'
+        : 'Open a new session for this pier?';
+
+    const proceed = await confirmDialog(msg);
+    if (!proceed) return;
+
+    try {
+        const body = { pier: currentPier };
+        if (action === 'close') body.session_id = currentSession.id;
+        
+        const result = await apiRequest(`/api/pier/session/${action}`, { method: 'POST', body });
+        if (result.status === 'success') {
+            showSuccess(action === 'open' ? 'Session Opened!' : 'Session Closed!');
+            try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
+            await refreshSessionStatus();
+            if (action === 'open') {
+                await loadProducts();
+                switchTab('pos');
             }
         }
     } catch (e) {
-        console.error("Session refresh failed:", e);
-        showError(e.message);
-    }
-}
-
-async function loadProducts() {
-    try {
-        const result = await apiRequest('/api/pier/products');
-        if (result.status === "success") {
-            allProducts = result.data;
-            renderProductGrid();
-        }
-    } catch (e) {
-        showError(e.message);
-    }
-}
-
-function renderProductGrid() {
-    const grid = document.getElementById('product-grid');
-    if (!grid) return;
-    grid.innerHTML = "";
-    allProducts.forEach(p => {
-        const item = document.createElement('div');
-        item.className = 'product-item';
-        item.innerHTML = `<span class="name">${p.name}</span><span class="price">${p.sale_price}฿</span>`;
-        item.onclick = () => addToCart(p);
-        grid.appendChild(item);
-    });
-}
-
-function addToCart(product) {
-    const existing = cart.find(item => item.id === product.id);
-    if (existing) existing.quantity++;
-    else cart.push({ ...product, quantity: 1 });
-    renderCart();
-    tg.HapticFeedback.impactOccurred('light');
-}
-
-function renderCart() {
-    const list = document.getElementById('cart-items');
-    if (!list) return;
-    list.innerHTML = "";
-    let total = 0;
-    cart.forEach(item => {
-        const row = document.createElement('div');
-        row.className = 'cart-item';
-        row.innerHTML = `
-            <div class="item-info"><span class="item-name">${item.name}</span><span class="item-price">${item.sale_price}฿</span></div>
-            <div class="qty-controls">
-                <button class="qty-btn" onclick="updateQty(${item.id}, -1)">-</button>
-                <span class="item-qty">${item.quantity}</span>
-                <button class="qty-btn" onclick="updateQty(${item.id}, 1)">+</button>
-            </div>
-        `;
-        list.appendChild(row);
-        total += item.sale_price * item.quantity;
-    });
-    const totalEl = document.getElementById('cart-total-amount');
-    if (totalEl) totalEl.innerText = total;
-}
-
-window.updateQty = (id, delta) => {
-    const item = cart.find(i => i.id === id);
-    if (item) {
-        item.quantity += delta;
-        if (item.quantity <= 0) cart = cart.filter(i => i.id !== id);
-        renderCart();
+        alert('Error: ' + e.message);
     }
 };
 
-function updateReportDisplay(report) {
-    const summary = document.getElementById('session-report-summary');
-    if (!summary) return;
-
-    // --- 1. KPI Summary Grid ---
-    const kpiHtml = `
-        <div class="report-summary-grid">
-            <div class="report-item">
-                <span class="val">${report.sales_count}</span>
-                <span class="lab">Transactions</span>
-            </div>
-            <div class="report-item">
-                <span class="val">${report.total_amount.toLocaleString()}฿</span>
-                <span class="lab">Total Revenue</span>
-            </div>
-            <div class="report-item">
-                <span class="val" style="color:var(--corporate-teal)">${report.cash_amount.toLocaleString()}฿</span>
-                <span class="lab">💵 Cash</span>
-            </div>
-            <div class="report-item">
-                <span class="val" style="color:var(--corporate-red)">${report.online_amount.toLocaleString()}฿</span>
-                <span class="lab">📱 Online</span>
-            </div>
-        </div>`;
-
-    // --- 2. Product Breakdown Table ---
-    let itemRows = '';
-    const items = report.items_summary || {};
-    Object.entries(items).sort((a,b) => b[1].subtotal - a[1].subtotal).forEach(([name, d]) => {
-        itemRows += `
-            <tr>
-                <td>${name}</td>
-                <td class="num">${d.qty}</td>
-                <td class="num">${d.unit_price.toLocaleString()}฿</td>
-                <td class="num total-cell">${d.subtotal.toLocaleString()}฿</td>
-                <td class="num cash-cell">${d.cash > 0 ? d.cash.toLocaleString()+'฿' : '—'}</td>
-                <td class="num online-cell">${d.online > 0 ? d.online.toLocaleString()+'฿' : '—'}</td>
-            </tr>`;
-    });
-
-    const tableHtml = Object.keys(items).length > 0 ? `
-        <div class="report-section-title">📦 Product Breakdown</div>
-        <div class="report-table-wrap">
-            <table class="report-table">
-                <thead>
-                    <tr>
-                        <th>Product</th>
-                        <th class="num">Qty</th>
-                        <th class="num">Unit ฿</th>
-                        <th class="num">Subtotal</th>
-                        <th class="num">Cash</th>
-                        <th class="num">Online</th>
-                    </tr>
-                </thead>
-                <tbody>${itemRows}</tbody>
-            </table>
-        </div>` : '';
-
-    // --- 3. Transactions Log ---
-    let txRows = '';
-    const txList = (report.transactions || []).slice().reverse();
-    txList.forEach(tx => {
-        const isCash = tx.payment === 'cash';
-        const badge = isCash
-            ? `<span class="pay-badge cash">Cash</span>`
-            : `<span class="pay-badge online">Online</span>`;
-        const rowClass = isCash ? 'cash-row' : 'online-row';
-        const itemsList = tx.items.map(i => `${i.name} ×${i.qty}`).join(', ');
-        txRows += `
-            <div class="tx-row ${rowClass}">
-                <div class="tx-left">
-                    <span class="tx-time">${tx.time}</span>
-                    <span class="tx-items">${itemsList}</span>
-                </div>
-                <div class="tx-right">
-                    ${badge}
-                    <span class="tx-amount">${tx.amount.toLocaleString()}฿</span>
-                </div>
-            </div>`;
-    });
-
-    const txHtml = txRows ? `
-        <div class="report-section-title" style="margin-top:20px">
-            🧾 Transactions
-            <span class="tx-count">${txList.length} sales</span>
-        </div>
-        <div class="tx-list">${txRows}</div>` : '';
-
-    summary.innerHTML = kpiHtml + tableHtml + txHtml;
-}
-
-
-function showError(msg) {
-    const overlay = document.getElementById('error-overlay');
-    const msgEl = document.getElementById('error-message');
-    if (!overlay || !msgEl) return;
-    msgEl.innerText = msg;
-    overlay.style.display = 'flex';
-}
-
-document.getElementById('close-error-btn')?.addEventListener('click', () => {
-    const overlay = document.getElementById('error-overlay');
-    if (overlay) overlay.style.display = 'none';
-});
-
-// Control Buttons
-document.getElementById('open-session-btn')?.addEventListener('click', async () => {
+// ===== SEA PLAN =====
+async function loadSeaPlan() {
     try {
-        await apiRequest('/api/pier/session/open', { method: 'POST', body: { pier: currentPier } });
-        tg.HapticFeedback.notificationOccurred('success');
-        await refreshSessionStatus();
-    } catch (e) { uiShowAlert(e.message); }
-});
+        const result = await apiRequest('/api/schedule');
+        const container = document.getElementById('boat-list');
+        if (!container) return;
+        container.innerHTML = '';
 
-document.getElementById('close-session-btn')?.addEventListener('click', closeSession);
-
-
-document.querySelectorAll('.pay-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-        if (cart.length === 0) { uiShowAlert("Cart is empty!"); return; }
-        const type = btn.getAttribute('data-type');
-        tg.MainButton.showProgress();
-        try {
-            await apiRequest('/api/pier/sale', {
-                method: 'POST',
-                body: { payload: {
-                    session_id: currentSession.id,
-                    pier: currentPier,
-                    items: cart.map(i => ({ name: i.name, quantity: i.quantity, price: i.sale_price })),
-                    payment_type: type
-                }}
+        if (result.status === 'success' && result.data?.length > 0) {
+            result.data.forEach(plan => {
+                const card = document.createElement('div');
+                card.className = 'schedule-card';
+                card.innerHTML = `
+                    <div class="sc-header">
+                        <span class="sc-boat">${plan.boat || '🚐 Land'}</span>
+                        <span class="sc-pax">${plan.pax} PAX</span>
+                    </div>
+                    <div class="sc-row">
+                        <span>🏷️ ${plan.program}</span>
+                        <span>⏰ ${plan.pickup_time || '--:--'}</span>
+                    </div>
+                `;
+                container.appendChild(card);
             });
-            tg.HapticFeedback.notificationOccurred('success');
+        } else {
+            container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:30px; font-size:13px;">No boats scheduled for today</p>';
+        }
+    } catch (e) {
+        console.error('Sea plan error:', e);
+    }
+}
+
+// ===== PRODUCTS =====
+async function loadProducts() {
+    try {
+        const result = await apiRequest('/api/pier/products');
+        if (result.status === 'success') {
+            allProducts = result.data;
+            buildCategoryPills();
+            renderProducts();
+        }
+    } catch (e) {
+        console.error('Products error:', e);
+    }
+}
+
+function buildCategoryPills() {
+    const container = document.getElementById('category-pills');
+    container.innerHTML = '';
+
+    // "All" pill
+    const allPill = document.createElement('button');
+    allPill.className = 'cat-pill active';
+    allPill.textContent = 'All';
+    allPill.onclick = () => filterCategory('all', allPill);
+    container.appendChild(allPill);
+
+    // Unique categories
+    const cats = [...new Set(allProducts.map(p => p.category || 'Other'))];
+    const order = ['BAR', 'Bar', 'Rental', 'Repellents', 'Clothing (Apparels)', 'Accessories', 'Bags & Storage', 'Other'];
+    cats.sort((a, b) => {
+        let ia = order.findIndex(o => a.toLowerCase().includes(o.toLowerCase()));
+        let ib = order.findIndex(o => b.toLowerCase().includes(o.toLowerCase()));
+        if (ia === -1) ia = 99;
+        if (ib === -1) ib = 99;
+        return ia - ib;
+    });
+
+    cats.forEach(cat => {
+        const pill = document.createElement('button');
+        pill.className = 'cat-pill';
+        pill.textContent = cat;
+        pill.onclick = () => filterCategory(cat, pill);
+        container.appendChild(pill);
+    });
+}
+
+window.filterCategory = function(cat, el) {
+    activeCategory = cat;
+    document.querySelectorAll('.cat-pill').forEach(p => p.classList.remove('active'));
+    if (el) el.classList.add('active');
+    renderProducts();
+    try { tg.HapticFeedback.selectionChanged(); } catch(e) {}
+};
+
+function renderProducts() {
+    const grid = document.getElementById('product-grid');
+    grid.innerHTML = '';
+
+    const filtered = activeCategory === 'all'
+        ? allProducts
+        : allProducts.filter(p => (p.category || 'Other') === activeCategory);
+
+    filtered.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'product-card';
+        card.id = `prod-${p.id}`;
+        
+        const accentColor = getCatColor(p.category);
+        const icon = getIconForCategory(p.category);
+        
+        card.innerHTML = `
+            <div class="cat-accent" style="background:${accentColor}"></div>
+            <img src="${icon}" class="p-icon" alt="">
+            <div class="p-name">${p.name}</div>
+            <div class="p-price">${p.sale_price}฿</div>
+        `;
+        card.onclick = () => addToCart(p);
+        grid.appendChild(card);
+    });
+}
+
+function getCatColor(cat) {
+    if (!cat) return 'var(--cat-other)';
+    const c = cat.toLowerCase();
+    if (c.includes('bar')) return 'var(--cat-bar)';
+    if (c.includes('rental')) return 'var(--cat-rental)';
+    if (c.includes('repellent')) return 'var(--cat-repellent)';
+    if (c.includes('clothing') || c.includes('apparel')) return 'var(--cat-clothing)';
+    if (c.includes('access')) return 'var(--cat-accessories)';
+    if (c.includes('bag') || c.includes('storage')) return 'var(--cat-bags)';
+    return 'var(--cat-other)';
+}
+
+function getIconForCategory(cat) {
+    if (!cat) return '/static/img/logo.png';
+    const c = cat.toLowerCase();
+    if (c.includes('bar')) return '/static/img/drink.png';
+    if (c.includes('rental')) return '/static/img/rental.png';
+    if (c.includes('clothing') || c.includes('apparel')) return '/static/img/clothing.png';
+    if (c.includes('bag') || c.includes('storage')) return '/static/img/bag.png';
+    return '/static/img/logo.png';
+}
+
+// ===== CART =====
+function addToCart(product) {
+    const existing = cart.find(i => i.id === product.id);
+    if (existing) existing.quantity++;
+    else cart.push({ ...product, quantity: 1 });
+
+    renderCart();
+
+    // Visual feedback
+    const el = document.getElementById(`prod-${product.id}`);
+    if (el) {
+        el.classList.add('pulse');
+        setTimeout(() => el.classList.remove('pulse'), 350);
+    }
+    try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+}
+
+function renderCart() {
+    const total = cart.reduce((s, i) => s + i.sale_price * i.quantity, 0);
+    const hasItems = cart.length > 0;
+
+    // Desktop cart sidebar
+    const cartEl = document.getElementById('cart-items');
+    if (cartEl) {
+        if (!hasItems) {
+            cartEl.innerHTML = '<div class="cart-empty">Tap a product to add it</div>';
+        } else {
+            cartEl.innerHTML = cart.map(item => `
+                <div class="cart-item">
+                    <div class="ci-info">
+                        <div class="ci-name">${item.name}</div>
+                        <div class="ci-price">${item.sale_price}฿ × ${item.quantity}</div>
+                    </div>
+                    <div class="ci-controls">
+                        <button class="qty-btn minus" onclick="updateQty(${item.id}, -1)">−</button>
+                        <span class="ci-qty">${item.quantity}</span>
+                        <button class="qty-btn" onclick="updateQty(${item.id}, 1)">+</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+
+    document.getElementById('cart-total').textContent = `${total.toLocaleString()}฿`;
+
+    // Enable/disable pay buttons
+    document.getElementById('btn-pay-cash').disabled = !hasItems;
+    document.getElementById('btn-pay-online').disabled = !hasItems;
+
+    // Mobile cart bar
+    const mobileBar = document.getElementById('mobile-cart-bar');
+    if (mobileBar) {
+        document.getElementById('mcb-total').textContent = `${total.toLocaleString()}฿`;
+        mobileBar.classList.toggle('active', hasItems);
+    }
+}
+
+window.updateQty = function(id, delta) {
+    const item = cart.find(i => i.id === id);
+    if (!item) return;
+    item.quantity += delta;
+    if (item.quantity <= 0) cart = cart.filter(i => i.id !== id);
+    renderCart();
+    try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+};
+
+window.clearCart = function() {
+    cart = [];
+    renderCart();
+};
+
+// ===== MOBILE CART SHEET =====
+window.openMobileCart = function() {
+    const sheet = document.getElementById('sheet-overlay');
+    const mobileItems = document.getElementById('mobile-cart-items');
+    
+    mobileItems.innerHTML = cart.map(item => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #f0f0f0;">
+            <div>
+                <div style="font-weight:600;">${item.name}</div>
+                <div style="font-size:12px; color:var(--text-muted);">${item.sale_price}฿ × ${item.quantity}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <button class="qty-btn minus" onclick="updateQty(${item.id}, -1); openMobileCart();">−</button>
+                <span style="font-weight:800;">${item.quantity}</span>
+                <button class="qty-btn" onclick="updateQty(${item.id}, 1); openMobileCart();">+</button>
+            </div>
+        </div>
+    `).join('');
+
+    document.getElementById('mobile-cart-total').textContent = 
+        `${cart.reduce((s, i) => s + i.sale_price * i.quantity, 0).toLocaleString()}฿`;
+    
+    sheet.classList.add('active');
+};
+
+window.closeMobileCart = function() {
+    document.getElementById('sheet-overlay').classList.remove('active');
+};
+
+// ===== PAYMENT =====
+window.processSale = async function(type) {
+    if (cart.length === 0 || !currentSession) return;
+
+    try {
+        const payload = {
+            session_id: currentSession.id,
+            pier: currentPier,
+            items: cart.map(i => ({ name: i.name, quantity: i.quantity, price: i.sale_price })),
+            payment_type: type
+        };
+
+        const result = await apiRequest('/api/pier/sale', { method: 'POST', body: { payload } });
+        if (result.status === 'success') {
+            showSuccess('Sale Completed!');
+            try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
             cart = [];
             renderCart();
+            closeMobileCart();
             await refreshSessionStatus();
-            
-            // Show Success Popup
-            const popup = document.getElementById('success-popup');
-            if (popup) {
-                popup.style.display = 'block';
-                void popup.offsetWidth; // trigger reflow
-                popup.style.opacity = '1';
-                setTimeout(() => {
-                    popup.style.opacity = '0';
-                    setTimeout(() => popup.style.display = 'none', 300);
-                }, 2000);
-            }
-            
-        } catch (e) { uiShowAlert(e.message); }
-        finally { tg.MainButton.hideProgress(); }
-    });
-});
+        }
+    } catch (e) {
+        alert('Payment error: ' + e.message);
+    }
+};
 
-// Start
+// ===== SYNC =====
+window.syncData = async function() {
+    const btn = document.getElementById('sync-btn');
+    btn.classList.add('loading');
+
+    try {
+        await apiRequest('/api/pier/sync', { method: 'POST' });
+        showSuccess('Synced!');
+        try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
+        await Promise.all([loadProducts(), loadSeaPlan(), refreshSessionStatus()]);
+    } catch (e) {
+        alert('Sync error: ' + e.message);
+    } finally {
+        btn.classList.remove('loading');
+    }
+};
+
+// ===== UTILITIES =====
+function showSuccess(msg) {
+    const el = document.getElementById('success-popup');
+    el.textContent = `✅ ${msg}`;
+    el.classList.add('visible');
+    setTimeout(() => el.classList.remove('visible'), 2500);
+}
+
+function confirmDialog(msg) {
+    return new Promise(resolve => {
+        try {
+            tg.showConfirm(msg, ok => resolve(ok));
+        } catch(e) {
+            resolve(confirm(msg));
+        }
+    });
+}
+
+// ===== REPORT =====
+async function loadReport() {
+    if (!currentPier) return;
+    try {
+        const result = await apiRequest('/api/pier/report', { data: { pier: currentPier } });
+        if (result.status === 'success') renderReport(result.data);
+    } catch (e) {
+        console.error('Report error:', e);
+    }
+}
+
+function renderReport(r) {
+    // KPI Cards
+    document.getElementById('rk-revenue').textContent = `${r.total_amount.toLocaleString()}฿`;
+    document.getElementById('rk-cost').textContent = `${r.total_cost.toLocaleString()}฿`;
+    document.getElementById('rk-profit').textContent = `${r.total_profit.toLocaleString()}฿`;
+    document.getElementById('rk-margin').textContent = `${r.margin_pct}%`;
+
+    // Product Breakdown Table
+    const tbody = document.getElementById('report-breakdown-body');
+    const items = Object.entries(r.items_summary).sort((a, b) => b[1].subtotal - a[1].subtotal);
+    
+    if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted); padding:20px;">No sales yet today</td></tr>';
+    } else {
+        tbody.innerHTML = items.map(([name, d]) => {
+            const marginPct = d.subtotal > 0 ? Math.round((d.profit / d.subtotal) * 100) : 0;
+            return `
+                <tr>
+                    <td>${name}</td>
+                    <td class="num">${d.qty}</td>
+                    <td class="num">${d.unit_price.toLocaleString()}฿</td>
+                    <td class="num cost-cell">${d.cost_price.toLocaleString()}฿</td>
+                    <td class="num">${d.subtotal.toLocaleString()}฿</td>
+                    <td class="num profit-cell">+${d.profit.toLocaleString()}฿ <small style="opacity:0.6;">(${marginPct}%)</small></td>
+                </tr>
+            `;
+        }).join('') + `
+            <tr style="font-weight:900; border-top:2px solid var(--border);">
+                <td>TOTAL</td>
+                <td class="num">${items.reduce((s, [,d]) => s + d.qty, 0)}</td>
+                <td class="num">—</td>
+                <td class="num cost-cell">${r.total_cost.toLocaleString()}฿</td>
+                <td class="num">${r.total_amount.toLocaleString()}฿</td>
+                <td class="num profit-cell">+${r.total_profit.toLocaleString()}฿ <small style="opacity:0.6;">(${r.margin_pct}%)</small></td>
+            </tr>
+        `;
+    }
+
+    // Transaction Log
+    const txList = document.getElementById('report-tx-list');
+    document.getElementById('report-tx-count').textContent = r.transactions.length;
+
+    if (r.transactions.length === 0) {
+        txList.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:20px; font-size:13px;">No transactions today</p>';
+    } else {
+        txList.innerHTML = r.transactions.map(tx => {
+            const itemsStr = tx.items.map(i => `${i.name}×${i.qty}`).join(', ');
+            return `
+                <div class="tx-row ${tx.payment}-row">
+                    <div class="tx-left">
+                        <span class="tx-time">⏰ ${tx.time}</span>
+                        <span class="tx-items">${itemsStr}</span>
+                    </div>
+                    <div class="tx-right">
+                        <span class="tx-amount">${tx.amount.toLocaleString()}฿</span>
+                        <span class="tx-badge ${tx.payment}">${tx.payment}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+}
+
+// ===== START =====
 initializeApp();

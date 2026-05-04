@@ -29,6 +29,7 @@ ENV/
 .env
 data/
 logs/
+*.log
 google service account/
 
 # OS
@@ -38,3 +39,8 @@ Thumbs.db
 # SQLite
 *.db
 *.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp

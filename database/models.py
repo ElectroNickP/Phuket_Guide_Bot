@@ -98,7 +98,9 @@ class Product(Base):
     name = Column(String, unique=True, nullable=False)
     cost_price = Column(Integer, default=0)
     sale_price = Column(Integer, default=0)
+    category = Column(String, default="Other")
     is_active = Column(Boolean, default=True)
+
     last_updated = Column(DateTime, default=get_phuket_now, onupdate=get_phuket_now)
 
 class CashSession(Base):
@@ -132,3 +134,19 @@ class SaleItem(Base):
     total_price = Column(Integer, nullable=False)
     
     sale = relationship("Sale", back_populates="items")
+
+# ─── OPERATIONAL LOGS (AI REPORTS) ──────────────────────────────────────
+class OperationalReport(Base):
+    __tablename__ = 'operational_reports'
+    
+    id = Column(Integer, primary_key=True)
+    author_id = Column(Integer, nullable=False) # telegram_id of sender
+    author_username = Column(String)
+    
+    report_type = Column(String, nullable=False) # 'fuel', 'defect', 'general_note'
+    boat_name = Column(String)
+    fuel_liters = Column(Integer)
+    defects = Column(String) # Stored as comma-separated string or JSON string
+    comment = Column(String)
+    
+    created_at = Column(DateTime, default=get_phuket_now)

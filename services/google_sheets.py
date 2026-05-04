@@ -28,15 +28,15 @@ class GoogleSheetsService:
         self._worksheets_cache = {} # {spreadsheet_id: (timestamp, list_of_worksheets)}
         self._col_values_cache = {} # {cache_key: (timestamp, list)}
 
-    async def get_spreadsheet_id(self):
+    async def get_spreadsheet_id(self) -> str:
         """Fetches spreadsheet ID from DB or config"""
         async with AsyncSessionLocal() as session:
             query = select(AppSettings).where(AppSettings.key == "spreadsheet_id")
             result = await session.execute(query)
-            setting = result.scalar_one_or_none()
+            setting = result.scalars().first()
             return setting.value if setting else config.DEFAULT_SPREADSHEET_ID
 
-    async def get_spreadsheet(self):
+    async def get_spreadsheet(self) -> gspread.Spreadsheet:
         """Returns the current spreadsheet instance, updating if ID changed"""
         sheet_id = await self.get_spreadsheet_id()
         if not self._spreadsheet or self._current_spreadsheet_id != sheet_id:
@@ -62,7 +62,7 @@ class GoogleSheetsService:
                     raise e
         return self._spreadsheet
 
-    async def get_sheet_by_date(self, target_date: datetime.date):
+    async def get_sheet_by_date(self, target_date: datetime.date) -> gspread.Worksheet | None:
         """
         Finds the sheet for a specific month/year.
         """
@@ -89,13 +89,13 @@ class GoogleSheetsService:
         logger.error(f"Sheet for date {target_date} not found!")
         return None
 
-    async def get_current_month_sheet(self):
+    async def get_current_month_sheet(self) -> gspread.Worksheet | None:
         """
         Finds the sheet for the current month.
         """
         return await self.get_sheet_by_date(get_phuket_now().date())
 
-    async def parse_guides(self, sheet):
+    async def parse_guides(self, sheet: gspread.Worksheet) -> tuple[list[dict], list[dict]]:
         """
         Parses Column A to identify staff and freelance guides based on markers:
         - Staff start after "ГИДЫ:"
@@ -146,7 +146,7 @@ class GoogleSheetsService:
         logger.info(f"Parsed {len(staff_guides)} staff and {len(freelance_guides)} freelance guides")
         return staff_guides, freelance_guides
 
-    async def _get_cached_worksheets(self, spreadsheet):
+    async def _get_cached_worksheets(self, spreadsheet: gspread.Spreadsheet) -> list[gspread.Worksheet]:
         cache_key = spreadsheet.id
         now = get_phuket_now()
         if cache_key in self._worksheets_cache:
@@ -159,7 +159,7 @@ class GoogleSheetsService:
         self._worksheets_cache[cache_key] = (now, worksheets)
         return worksheets
 
-    async def _get_cached_col_values(self, sheet, col_index):
+    async def _get_cached_col_values(self, sheet: gspread.Worksheet, col_index: int) -> list[str]:
         cache_key = f"{sheet.spreadsheet.id}_{sheet.title}_col_{col_index}"
         now = get_phuket_now()
         if cache_key in self._col_values_cache:
@@ -172,7 +172,7 @@ class GoogleSheetsService:
         self._col_values_cache[cache_key] = (now, values)
         return values
 
-    async def _get_cached_values(self, sheet):
+    async def _get_cached_values(self, sheet: gspread.Worksheet) -> list[list[str]]:
         cache_key = f"{sheet.spreadsheet.id}_{sheet.title}"
         now = get_phuket_now()
         if cache_key in self._all_values_cache:
@@ -184,7 +184,7 @@ class GoogleSheetsService:
         self._all_values_cache[cache_key] = (now, values)
         return values
 
-    async def _get_cached_merges(self, sheet):
+    async def _get_cached_merges(self, sheet: gspread.Worksheet) -> list[dict]:
         sheet_title = sheet.title
         if sheet_title in self._merges_cache:
             return self._merges_cache[sheet_title]
@@ -199,7 +199,7 @@ class GoogleSheetsService:
             logger.error(f"Error fetching merges for {sheet_title}: {e}")
             return []
 
-    async def get_guide_schedule(self, sheet, guide_row, target_date: datetime.date = None):
+    async def get_guide_schedule(self, sheet: gspread.Worksheet, guide_row: int, target_date: datetime.date = None) -> str | None:
         if target_date is None:
             target_date = get_phuket_now().date()
         
@@ -237,7 +237,7 @@ class GoogleSheetsService:
                 sr, sc = m['startRowIndex'], m['startColumnIndex']
                 if sr < len(all_values) and sc < len(all_values[sr]):
                     merged_val = all_values[sr][sc].strip()
-    async def get_guide_4day_data(self, username: str):
+    async def get_guide_4day_data(self, username: str) -> list[dict]:
         """Fetches 4-day schedule data for a specific username (Yesterday to After Tomorrow)"""
         now = get_phuket_now().date()
         date_list = [
@@ -273,7 +273,7 @@ class GoogleSheetsService:
         
         return results
 
-    async def get_store_price_list(self):
+    async def get_store_price_list(self) -> list[dict]:
         """
         Fetches products from 'Store Price List' sheet.
         Cols: A (Name), B (Cost price), C (Sale price)
@@ -302,8 +302,10 @@ class GoogleSheetsService:
                 products.append({
                     "name": name,
                     "cost_price": cost_price,
-                    "sale_price": sale_price
+                    "sale_price": sale_price,
+                    "category": row[3].strip() if len(row) > 3 and row[3].strip() else "Other"
                 })
+
             
             return products
         except Exception as e:

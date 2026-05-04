@@ -10,9 +10,11 @@ services:
   bot:
     build: .
     volumes:
+      - .:/app
       - ./data:/app/data
       - ./logs:/app/logs
       - ./google service account:/app/google service account
+      - tunnel_shared:/app/shared
     env_file:
       - .env
     restart: always
@@ -22,11 +24,16 @@ services:
       - redis
 
   tunnel:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate --url http://bot:8080
+    build:
+      context: ./docker/tunnel
+    volumes:
+
+      - tunnel_shared:/app/shared
     restart: always
     depends_on:
       - bot
 
 volumes:
   redis_data:
+  tunnel_shared:
+

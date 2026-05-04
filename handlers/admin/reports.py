@@ -87,7 +87,7 @@ async def cmd_stats_kb(message: types.Message):
         
         query_int = select(AppSettings).where(AppSettings.key == "polling_interval")
         res_int = await session.execute(query_int)
-        setting_int = res_int.scalar_one_or_none()
+        setting_int = res_int.scalars().first()
         current_interval = int(setting_int.value) if setting_int else config.POLLING_INTERVAL
         
         user_list_str = ""

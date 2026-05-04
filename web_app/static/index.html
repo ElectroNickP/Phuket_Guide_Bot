@@ -3,134 +3,209 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Phuket Guide App</title>
+    <title>Best Sea — Pier POS</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/static/css/style.css?v=8">
-    <!-- Google Fonts for modern look -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css?v=20">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div id="app-container">
-        <!-- Header -->
-        <header class="app-header">
-            <div style="display: flex; align-items: center; margin-bottom: 8px;">
-                <img src="/static/img/logo.png" alt="Best" style="height: 36px; margin-right: 12px; object-fit: contain;">
-                <h1 id="greeting">Loading...</h1>
-            </div>
-            <p id="date-display" class="subtitle"></p>
-            <!-- Diagnostic Info (Small & Subtle) -->
-            <div id="debug-auth-info" style="font-size: 10px; color: var(--hint-color); margin-top: 4px; opacity: 0.6;"></div>
-        </header>
 
-        <!-- Navigation Tabs -->
-        <div class="tabs">
-            <button class="tab-btn active" data-target="schedule-tab">Schedule</button>
-            <button class="tab-btn" data-target="reports-tab">Reports</button>
+    <!-- LOADER -->
+    <div id="loader-overlay">
+        <div class="loader-spinner"></div>
+        <div class="loader-text">Loading POS...</div>
+    </div>
+
+    <!-- SUCCESS POPUP -->
+    <div id="success-popup">✅ Done</div>
+
+    <!-- ===== HEADER ===== -->
+    <header class="app-header">
+        <div class="header-left">
+            <h2 id="greeting">Pier POS</h2>
+            <div class="header-sub">
+                <span id="date-display">Loading...</span>
+                <span style="margin-left:8px; opacity:0.3; font-size:9px;">v2.0</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <span class="header-badge" id="session-badge">CLOSED</span>
+            <button class="sync-btn" id="sync-btn" onclick="syncData()" title="Sync">🔄</button>
+        </div>
+    </header>
+
+    <!-- ===== KPI BAR ===== -->
+    <div class="kpi-bar">
+        <div class="kpi-item">
+            <div class="kpi-val" id="kpi-revenue">0฿</div>
+            <div class="kpi-label">Revenue</div>
+        </div>
+        <div class="kpi-item">
+            <div class="kpi-val" id="kpi-txns">0</div>
+            <div class="kpi-label">Sales</div>
+        </div>
+        <div class="kpi-item">
+            <div class="kpi-val cash" id="kpi-cash">0฿</div>
+            <div class="kpi-label">💵 Cash</div>
+        </div>
+        <div class="kpi-item">
+            <div class="kpi-val online" id="kpi-online">0฿</div>
+            <div class="kpi-label">📱 Online</div>
+        </div>
+    </div>
+
+    <!-- ===== TABS ===== -->
+    <div class="tabs">
+        <button class="tab-btn active" id="tab-btn-schedule" onclick="switchTab('schedule')">📋 Schedule</button>
+        <button class="tab-btn" id="tab-btn-pos" onclick="switchTab('pos')">🛒 POS</button>
+        <button class="tab-btn" id="tab-btn-report" onclick="switchTab('report')">📊 Report</button>
+    </div>
+
+    <!-- ===== BODY ===== -->
+    <div class="app-body">
+
+        <!-- SCHEDULE PANEL -->
+        <div id="panel-schedule" class="tab-panel active">
+            <div class="schedule-panel">
+                <div id="boat-list">
+                    <!-- Boat cards injected here -->
+                </div>
+
+                <!-- Session Controls -->
+                <div class="session-controls" id="session-controls">
+                    <button class="session-open-btn" id="session-open-btn" onclick="toggleSession()">🟢 Open New Session</button>
+                </div>
+                <div id="session-active-controls" style="display:none;">
+                    <button class="session-close-btn" onclick="toggleSession()">🔴 Close Session & Finalize Report</button>
+                </div>
+            </div>
         </div>
 
-        <!-- Main Content Area -->
-        <main class="content-area">
-            
-            <!-- Schedule Tab Content (Guide View) -->
-            <div id="schedule-tab" class="tab-content active">
-                <div id="schedule-loading" class="loader">Loading data...</div>
-                <div id="schedule-cards" class="cards-container">
-                    <!-- Cards will be injected via JS -->
-                </div>
-            </div>
+        <!-- POS PANEL -->
+        <div id="panel-pos" class="tab-panel">
+            <div class="pos-layout">
+                <!-- LEFT: Products -->
+                <div class="products-column">
+                    <!-- Category Pills -->
+                    <div class="category-pills" id="category-pills">
+                        <button class="cat-pill active" data-cat="all" onclick="filterCategory('all', this)">All</button>
+                        <!-- Dynamic pills injected -->
+                    </div>
 
-            <!-- Pier Manager View (Hidden by default) -->
-            <div id="manager-view" class="tab-content manager-view-container" style="display: none;">
-                <div class="manager-header">
-                    <h2 id="manager-pier-title">Pier: ---</h2>
-                    <div class="session-badge" id="session-status">Session Closed</div>
-                </div>
-
-                <div id="session-controls" class="card premium-card">
-                    <button id="open-session-btn" class="tg-button success">🟢 Open New Session</button>
-                </div>
-
-                <div id="cash-register" style="display: none;">
-                    <div class="pos-layout">
-                        <!-- Product Grid -->
+                    <!-- Product Grid -->
+                    <div class="product-scroll">
                         <div class="product-grid" id="product-grid">
-                            <!-- Products injected here -->
-                        </div>
-
-                        <!-- Shopping Cart / Sidebar -->
-                        <div class="cart-sidebar card">
-                            <h3>🛒 Cart</h3>
-                            <div id="cart-items" class="cart-items-list">
-                                <!-- Cart items -->
-                            </div>
-                            <div class="cart-footer">
-                                <div class="cart-total">Total: <span id="cart-total-amount">0</span>฿</div>
-                                <div class="payment-selection">
-                                    <button class="pay-btn cash" data-type="cash">💵 Cash</button>
-                                    <button class="pay-btn online" data-type="online">📱 Online</button>
-                                </div>
-                            </div>
+                            <!-- Product cards injected -->
                         </div>
                     </div>
                 </div>
 
-                <div id="report-container" class="card report-section" style="display: none; margin-top: 1rem;">
-                    <h3 id="report-title">📊 Shift Report</h3>
-                    <div id="session-report-summary" class="report-summary">
-                        <!-- Report data -->
+                <!-- RIGHT: Cart Sidebar (desktop) -->
+                <div class="cart-sidebar">
+                    <div class="cart-header">
+                        <h3>🛒 Order</h3>
+                        <button class="cart-clear-btn" onclick="clearCart()">Clear</button>
                     </div>
-                    <button id="close-session-btn" class="tg-button danger" style="margin-top: 1rem;">🔴 Close Session</button>
+                    <div class="cart-items" id="cart-items">
+                        <div class="cart-empty">Tap a product to add it</div>
+                    </div>
+                    <div class="cart-footer">
+                        <div class="cart-total-row">
+                            <span class="cart-total-label">Total</span>
+                            <span class="cart-total-val" id="cart-total">0฿</span>
+                        </div>
+                        <div class="pay-buttons">
+                            <button class="pay-btn cash-btn" id="btn-pay-cash" onclick="processSale('cash')" disabled>💵 Cash</button>
+                            <button class="pay-btn online-btn" id="btn-pay-online" onclick="processSale('online')" disabled>📱 Online</button>
+                        </div>
+                    </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Reports Tab Content -->
-            <div id="reports-tab" class="tab-content" style="display: none;">
-                
-                <div class="card premium-card">
-                    <h2>🚀 Program Start</h2>
-                    <form id="start-report-form">
-                        <div class="form-group">
-                            <label>Actual start time</label>
-                            <input type="time" id="start-time" required class="tg-input">
-                        </div>
-                        <div class="form-group">
-                            <label>Actual number of guests (Adults)</label>
-                            <input type="number" id="start-pax-adults" placeholder="0" required class="tg-input">
-                        </div>
-                        <div class="form-group">
-                            <label>Actual number of children</label>
-                            <input type="number" id="start-pax-children" placeholder="0" required class="tg-input">
-                        </div>
-                        <div class="form-group">
-                            <label>Comment (optional)</label>
-                            <textarea id="start-comment" placeholder="Write if guests are late or no-show..." class="tg-input"></textarea>
-                        </div>
-                        <button type="submit" class="tg-button">Send Start</button>
-                    </form>
+        <!-- REPORT PANEL -->
+        <div id="panel-report" class="tab-panel">
+            <div class="report-panel">
+                <!-- Profit KPI Cards -->
+                <div class="report-kpi-grid" id="report-kpi-grid">
+                    <div class="rkpi revenue">
+                        <div class="rkpi-val" id="rk-revenue">0฿</div>
+                        <div class="rkpi-label">Revenue</div>
+                    </div>
+                    <div class="rkpi cost">
+                        <div class="rkpi-val" id="rk-cost">0฿</div>
+                        <div class="rkpi-label">Cost</div>
+                    </div>
+                    <div class="rkpi profit">
+                        <div class="rkpi-val" id="rk-profit">0฿</div>
+                        <div class="rkpi-label">Profit</div>
+                    </div>
+                    <div class="rkpi margin">
+                        <div class="rkpi-val" id="rk-margin">0%</div>
+                        <div class="rkpi-label">Margin</div>
+                    </div>
                 </div>
 
-                <div class="card premium-card" style="margin-top: 1rem;">
-                    <h2>🏁 Program Finish</h2>
-                    <form id="finish-report-form">
-                        <div class="form-group">
-                            <label>Actual finish time</label>
-                            <input type="time" id="finish-time" required class="tg-input">
-                        </div>
-                        <button type="submit" class="tg-button">Send Finish</button>
-                    </form>
+                <!-- Breakdown Table -->
+                <div class="report-section">
+                    <div class="rs-header">📦 Product Breakdown</div>
+                    <div class="report-table-wrap">
+                        <table class="report-table" id="report-breakdown-table">
+                            <thead>
+                                <tr>
+                                    <th>Product</th>
+                                    <th class="num">Qty</th>
+                                    <th class="num">Sale</th>
+                                    <th class="num">Cost</th>
+                                    <th class="num">Revenue</th>
+                                    <th class="num">Profit</th>
+                                </tr>
+                            </thead>
+                            <tbody id="report-breakdown-body">
+                                <!-- Rows injected -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
+                <!-- Transaction Log -->
+                <div class="report-section">
+                    <div class="rs-header">🧾 Transactions <span class="rs-count" id="report-tx-count">0</span></div>
+                    <div class="tx-list" id="report-tx-list">
+                        <!-- Transaction rows injected -->
+                    </div>
+                </div>
             </div>
+        </div>
 
-        </main>
     </div>
 
-    <!-- Success Popup -->
-    <div id="success-popup" style="display: none; position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(76, 175, 80, 0.95); backdrop-filter: blur(8px); color: white; padding: 12px 24px; border-radius: 30px; z-index: 1000; box-shadow: 0 4px 15px rgba(0,0,0,0.2); font-weight: 600; text-align: center; font-size: 15px; opacity: 0; transition: opacity 0.3s ease;">
-        ✅ Purchase Completed
+    <!-- MOBILE CART BAR (visible only on mobile when cart has items) -->
+    <div class="mobile-cart-bar" id="mobile-cart-bar">
+        <div class="mcb-total" id="mcb-total">0฿</div>
+        <button class="mcb-checkout" onclick="openMobileCart()">Checkout →</button>
     </div>
 
-    <!-- Initialization and Logic -->
-    <script src="/static/js/app.js?v=9"></script>
+    <!-- MOBILE BOTTOM SHEET (for cart on small screens) -->
+    <div class="sheet-overlay" id="sheet-overlay" onclick="closeMobileCart()">
+        <div class="sheet-content" onclick="event.stopPropagation()">
+            <div class="sheet-handle"></div>
+            <h3 style="font-weight:800; margin-bottom:16px;">🛒 Your Order</h3>
+            <div id="mobile-cart-items"></div>
+            <div style="margin-top:20px; border-top: 2px solid var(--border); padding-top:16px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:16px;">
+                    <span style="font-weight:600; color:var(--text-secondary);">Total</span>
+                    <span style="font-size:22px; font-weight:900;" id="mobile-cart-total">0฿</span>
+                </div>
+                <div class="pay-buttons">
+                    <button class="pay-btn cash-btn" onclick="processSale('cash')">💵 Cash</button>
+                    <button class="pay-btn online-btn" onclick="processSale('online')">📱 Online</button>
+                </div>
+                <button style="width:100%; margin-top:12px; padding:12px; border:none; background:transparent; color:var(--red); font-weight:700; cursor:pointer;" onclick="clearCart(); closeMobileCart();">Clear All</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=20"></script>
 </body>
 </html>

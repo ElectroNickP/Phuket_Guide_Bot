@@ -31,12 +31,14 @@ class Settings(BaseSettings):
     DB_URL: str = "sqlite+aiosqlite:///data/bot_database.db"
     REDIS_URL: str = "redis://redis:6379/0"
     
-    # WebApp settings
     WEBAPP_URL: str = "https://your-app.ngrok.app" # Needs to be HTTPS
     WEBAPP_PORT: int = 8080
     
+    # AI Settings
+    OPENAI_API_KEY: SecretStr | None = None
+    
     # Intervals
-    POLLING_INTERVAL: int = 600  # 10 minutes in seconds
+    POLLING_INTERVAL: int = 1  # 1 second between poll requests (if not using long polling)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -933,7 +933,7 @@ async def process_wakeup_ok(callback: types.CallbackQuery):
             WakeUpConfirmation.pickup_time == p_time
         )
         res = await session.execute(q_fetch)
-        conf = res.scalar_one_or_none()
+        conf = res.scalars().first()
         if conf:
             prog_name = conf.program_name or "---"
 
@@ -1033,7 +1033,7 @@ async def process_wakeup_problem_description(message: types.Message, state: FSMC
                 WakeUpConfirmation.pickup_time == p_time
             )
             res = await session.execute(q)
-            conf = res.scalar_one_or_none()
+            conf = res.scalars().first()
             prog_name = conf.program_name if conf else "---"
             
         msg = (

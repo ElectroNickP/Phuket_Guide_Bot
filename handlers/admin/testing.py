@@ -12,7 +12,10 @@ from database.models import WakeUpConfirmation
 from sqlalchemy import select
 from loguru import logger
 from utils.permissions import RoleFilter
-from .base import ADMIN_ALL, ADMIN_MANAGEMENT, IsAdminFilter
+from .base import ADMIN_ALL, ADMIN_MANAGEMENT, IsAdminFilter, IsTesterFilter
+from database.models import UserRole
+from services.google_sheets import google_sheets
+from aiogram.filters import Command
 
 router = Router()
 router.message.filter(IsAdminFilter())
@@ -97,7 +100,7 @@ async def process_wakeup_test_user(callback: types.CallbackQuery):
                 WakeUpConfirmation.pickup_time == p_time_str
             )
             res = await session.execute(q)
-            conf = res.scalar_one_or_none()
+            conf = res.scalars().first()
             if conf:
                 status_text = f"<b>{conf.status.upper()}</b> (отправлено в {conf.sent_at.strftime('%H:%M')})"
             else:
@@ -154,7 +157,7 @@ async def process_wakeup_test_action(callback: types.CallbackQuery, bot: Bot):
                 WakeUpConfirmation.pickup_time == p_time_str
             )
             res = await session.execute(q)
-            conf = res.scalar_one_or_none()
+            conf = res.scalars().first()
             
             if not conf:
                 conf = WakeUpConfirmation(
@@ -222,3 +225,94 @@ async def process_sos_test_user(callback: types.CallbackQuery, state: FSMContext
     await state.update_data(proxy_username=username, is_test=True)
     from handlers.help import cmd_help
     await cmd_help(callback.message, state)
+
+# ─── Impersonation (Tester Mode) ───────────────────────────────────────────
+
+@router.message(Command("become_user"), IsTesterFilter())
+async def cmd_become_user(message: types.Message):
+    """Tester: Choose a user to impersonate"""
+    sheet = await google_sheets.get_current_month_sheet()
+    if not sheet:
+        await message.answer("❌ Не удалось загрузить расписание.")
+        return
+
+    staff, freelance = await google_sheets.parse_guides(sheet)
+    all_guides = staff + freelance
+    
+    # Sort and remove duplicates from sheet
+    unique_guide_names = sorted(list(set([g['username'].lower() for g in all_guides if g['username']])))
+    
+    builder = InlineKeyboardBuilder()
+    
+    # Add common roles for testing
+    builder.row(types.InlineKeyboardButton(text="--- SYSTEM ROLES ---", callback_data="none"))
+    builder.row(
+        types.InlineKeyboardButton(text="👤 Admin", callback_data="imp_role_admin"),
+        types.InlineKeyboardButton(text="👤 Super Admin", callback_data="imp_role_super_admin")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="👤 Head of Guide", callback_data="imp_role_head_guide"),
+        types.InlineKeyboardButton(text="👤 Hot Line", callback_data="imp_role_hotline")
+    )
+    
+    builder.row(types.InlineKeyboardButton(text="--- GUIDES FROM SHEET ---", callback_data="none"))
+    for uname in unique_guide_names:
+        builder.button(text=f"👤 @{uname}", callback_data=f"imp_user_{uname}")
+        
+    builder.adjust(1, 2, 2, 1, 3)
+    
+    await message.answer(
+        "🎭 <b>Режим имитации (Tester Mode)</b>\n\n"
+        "Выберите пользователя или роль, которую хотите примерить.\n"
+        "После выбора бот будет считать вас этим пользователем для ВСЕХ функций.",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+
+@router.message(Command("exit_impersonation"))
+async def cmd_exit_impersonation(message: types.Message, state: FSMContext):
+    """Restore original identity"""
+    redis = state.storage.redis if hasattr(state, "storage") and hasattr(state.storage, "redis") else None
+    if redis:
+        await redis.delete(f"impersonation:{message.from_user.id}")
+        await message.answer("✅ <b>Режим имитации выключен.</b>\nВаша личность восстановлена. /start для обновления меню.", parse_mode="HTML")
+    else:
+        await message.answer("❌ Ошибка: Redis не доступен.")
+
+@router.callback_query(F.data.startswith("imp_user_"), IsTesterFilter())
+async def process_impersonate_user(callback: types.CallbackQuery, state: FSMContext):
+    target_username = callback.data.replace("imp_user_", "")
+    
+    # Logic: Default to GUIDE role for impersonated guides unless specified
+    imp_data = {
+        "username": target_username,
+        "role": UserRole.GUIDE,
+        "id": 0 # Fake ID
+    }
+    
+    redis = state.storage.redis if hasattr(state, "storage") and hasattr(state.storage, "redis") else None
+    if redis:
+        import json
+        await redis.set(f"impersonation:{callback.from_user.id}", json.dumps(imp_data), ex=3600) # 1 hour expiry
+        await callback.message.edit_text(f"✅ Теперь вы имитируете @{target_username}.\nИспользуйте /start для обновления интерфейса.")
+    else:
+        await callback.answer("Ошибка: Redis недоступен", show_alert=True)
+
+@router.callback_query(F.data.startswith("imp_role_"), IsTesterFilter())
+async def process_impersonate_role(callback: types.CallbackQuery, state: FSMContext):
+    role = callback.data.replace("imp_role_", "")
+    
+    imp_data = {
+        "username": f"TEST_{role.upper()}",
+        "role": role,
+        "id": 0
+    }
+    
+    redis = state.storage.redis if hasattr(state, "storage") and hasattr(state.storage, "redis") else None
+    if redis:
+        import json
+        await redis.set(f"impersonation:{callback.from_user.id}", json.dumps(imp_data), ex=3600)
+        await callback.message.edit_text(f"✅ Теперь вы имитируете РОЛЬ: {role}.\nИспользуйте /start для обновления интерфейса.")
+    else:
+        await callback.answer("Ошибка: Redis недоступен", show_alert=True)
+

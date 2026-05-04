@@ -11,6 +11,7 @@ from utils.time import get_phuket_now
 from utils.auth_tokens import generate_auth_token
 from loguru import logger
 from config import config
+from services.np_calculator import detect_nps, np_fee_line, calc_envelope, NP_FEES
 import datetime
 import re
 
@@ -21,59 +22,6 @@ ALLOWED_ROLES = [UserRole.PIER_MANAGER, UserRole.SUPER_ADMIN, UserRole.ADMIN, Us
 
 PIERS = ["RPM", "Yamu", "Sarasin", "Chalong"]
 
-# Maps lowercased program-name substrings → list of NP codes
-# Order matters: more specific first
-NP_PROGRAM_MAP: list[tuple[str, list[str]]] = [
-    ("pp bamboo",         ["PP"]),
-    ("pp ovn",            ["PP"]),
-    ("pp sunrise",        ["PP"]),
-    ("11 island",         ["PP", "JB", "HG"]),
-    ("11 остров",         ["PP", "JB", "HG"]),
-    ("4 pearl",           ["PP", "JB"]),
-    ("4 жемчуж",          ["PP", "JB"]),
-    ("5 pearl",           ["PP", "JB", "HG"]),
-    ("5 жемчуж",          ["PP", "JB", "HG"]),
-    ("krabi tropical",    ["HG"]),
-    ("phi phi",           ["PP"]),
-    ("james bond",        ["JB"]),
-    ("phang nga",         ["JB"]),
-    ("hong island",       ["HG"]),
-    ("hong",              ["HG"]),
-    ("4 island",          ["PP"]),
-]
-
-# NP fees
-# parking = flat fee per boat visit (not per person)
-NP_FEES = {
-    "PP": {
-        "emoji": "🏝",
-        "name": "Phi Phi (PP)",
-        "adult": 350,
-        "child": 200,
-        "parking_flat": 100,  # flat per visit
-        "free_per_10": 0,     # optional ("can cut"), not applied by default
-        "sunday_note": None,
-    },
-    "JB": {
-        "emoji": "🗿",
-        "name": "James Bond (JB)",
-        "adult": 300,
-        "child": 150,
-        "parking_flat": 100,
-        "free_per_10": 2,     # every 10 pax → 2 free (pay 8)
-        "sunday_note": "⚠️ Воскресенье: полная оплата, без бесплатных!",
-    },
-    "HG": {
-        "emoji": "🌊",
-        "name": "Hong Island (HG)",
-        "adult": 300,
-        "child": 150,
-        "parking_flat": 0,
-        "free_per_10": 1,     # every 10 pax → 1 free
-        "sunday_note": None,
-    },
-}
-
 class PierManagerStates(StatesGroup):
     waiting_for_pier = State()
     dashboard = State()
@@ -82,6 +30,7 @@ class PierManagerStates(StatesGroup):
     
     # Cash Register states
     cash_main = State()
+    cash_sale_category = State()
     cash_sale_product = State()
     cash_sale_quantity = State()
     cash_sale_payment = State()
@@ -352,15 +301,100 @@ async def ops_cash_start_sale(message: types.Message, state: FSMContext):
 
     # Initialize cart
     await state.update_data(cart=[])
+    await state.set_state(PierManagerStates.cash_sale_category)
+    await show_category_selection(message, state)
+
+async def show_category_selection(message: types.Message, state: FSMContext):
+    # Fetch categories from DB for parity with Web App
+    categories = await cash_service.get_active_categories()
+    
+    # Mapping for nice labels with emojis
+    MAPPING = {
+        "Bar": "🍹 Напитки (Bar)",
+        "Rental": "🤿 Аренда (Rental)",
+        "Repellents": "🦟 Репелленты",
+        "Clothing": "👕 Одежда",
+        "Clothing (Apparel)": "👕 Одежда",
+        "Bags & Storage": "🎒 Сумки",
+        "Accessories": "💍 Аксессуары",
+        "Other": "🧩 Разное"
+    }
+    
+    # Store dynamic mapping in state for reverse lookup
+    label_to_cat = {}
+    
+    builder = ReplyKeyboardBuilder()
+    # Add known categories from DB
+    processed = set()
+    for cat in categories:
+        label = MAPPING.get(cat, f"📦 {cat}")
+        if label in processed: continue
+        builder.button(text=label)
+        label_to_cat[label] = cat
+        processed.add(label)
+    
+    # Fallback if no products/categories
+    if not categories:
+        builder.button(text="🧩 Разное")
+        label_to_cat["🧩 Разное"] = "Other"
+
+    builder.row(KeyboardButton(text="🔙 Назад"))
+    builder.adjust(2)
+    
+    await state.update_data(label_to_cat=label_to_cat)
+    
+    await message.answer(
+        "📂 <b>Выберите категорию товаров:</b>",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
+
+@router.message(PierManagerStates.cash_sale_category, F.text == "🔙 Назад")
+async def ops_cash_cat_back(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    pier = data.get("selected_pier")
+    session = await cash_service.get_active_session(pier)
+    await state.set_state(PierManagerStates.cash_main)
+    await show_cash_menu(message, pier, session)
+
+@router.message(PierManagerStates.cash_sale_category)
+async def ops_cash_select_category(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    label_to_cat = data.get("label_to_cat", {})
+    category = label_to_cat.get(message.text)
+    
+    if not category:
+        # Emergency backup if state lost mapping
+        text = message.text.lower()
+        if "напитки" in text: category = "Bar"
+        elif "аренда" in text: category = "Rental"
+        elif "репеллент" in text: category = "Repellents"
+        elif "одежда" in text: category = "Clothing"
+        elif "сумки" in text: category = "Bags & Storage"
+        elif "разное" in text: category = "Other"
+        else: category = "Other"
+    
+    await state.update_data(selected_category=category)
+    products = await cash_service.get_active_products()
+    filtered = [p for p in products if p.category == category]
+    
+    if not filtered:
+        await message.answer(f"⚠️ В категории <b>{category}</b> нет активных товаров.", parse_mode="HTML")
+        return
+
+    data = await state.get_data()
+    cart = data.get("cart", [])
     await state.set_state(PierManagerStates.cash_sale_product)
-    await show_product_selection(message, products, [])
+    await show_product_selection(message, filtered, cart)
 
 async def show_product_selection(message: types.Message, products, cart):
     builder = ReplyKeyboardBuilder()
     for p in products:
-        builder.button(text=f"{p.name} ({p.sale_price}฿)")
+        emoji = get_emoji_for_category(p.category)
+        builder.button(text=f"{emoji} {p.name} ({p.sale_price}฿)")
     
-    builder.row(KeyboardButton(text="✅ Оформить продажу"))
+    builder.row(KeyboardButton(text="🧮 Посмотреть корзину"))
+    builder.row(KeyboardButton(text="📁 К категориям"))
     builder.row(KeyboardButton(text="❌ Отмена"))
     builder.adjust(2)
     
@@ -375,19 +409,26 @@ async def show_product_selection(message: types.Message, products, cart):
         cart_text += f"──────────────────\n💰 <b>Итого: {total}฿</b>\n\n"
 
     await message.answer(
-        f"{cart_text}🛍 <b>Выберите товар для добавления:</b>",
+        f"{cart_text}🛍 <b>Выберите товар или действие:</b>",
         parse_mode="HTML",
         reply_markup=builder.as_markup(resize_keyboard=True)
     )
 
-@router.message(PierManagerStates.cash_sale_product, F.text == "❌ Отмена")
-async def ops_cash_sale_cancel(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    pier = data.get("selected_pier")
-    session = await cash_service.get_active_session(pier)
-    await state.set_state(PierManagerStates.cash_main)
-    await show_cash_menu(message, pier, session)
+def get_emoji_for_category(cat: str) -> str:
+    c = cat.lower()
+    if "bar" in c: return "🍹"
+    if "rental" in c: return "🤿"
+    if "repellent" in c: return "🦟"
+    if "clothing" in c: return "👕"
+    if "bag" in c: return "🎒"
+    return "🧩"
 
+@router.message(PierManagerStates.cash_sale_product, F.text == "📁 К категориям")
+async def ops_cash_back_to_cats(message: types.Message, state: FSMContext):
+    await state.set_state(PierManagerStates.cash_sale_category)
+    await show_category_selection(message)
+
+@router.message(PierManagerStates.cash_sale_product, F.text == "🧮 Посмотреть корзину")
 @router.message(PierManagerStates.cash_sale_product, F.text == "✅ Оформить продажу")
 async def ops_cash_sale_finish(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -399,27 +440,43 @@ async def ops_cash_sale_finish(message: types.Message, state: FSMContext):
     builder = ReplyKeyboardBuilder()
     builder.button(text="💵 Наличные B")
     builder.button(text="💳 Онлайн")
+    builder.button(text="🔄 Очистить корзину")
     builder.button(text="🔙 Назад к товарам")
-    builder.adjust(2, 1)
+    builder.adjust(2, 1, 1)
     
-    total = sum(item['quantity'] * item['price'] for item in cart)
+    items_text = "<b>🛒 Состав заказа:</b>\n"
+    total = 0
+    for i, item in enumerate(cart):
+        item_total = item['quantity'] * item['price']
+        total += item_total
+        items_text += f"{i+1}. {item['name']} x{item['quantity']} = {item_total}฿\n"
+    
     await state.set_state(PierManagerStates.cash_sale_payment)
     await message.answer(
-        f"💰 <b>Сумма к оплате: {total}฿</b>\n\nВыберите способ оплаты:",
+        f"{items_text}\n💰 <b>Сумма к оплате: {total}฿</b>\n\nВыберите способ оплаты или действие:",
         parse_mode="HTML",
         reply_markup=builder.as_markup(resize_keyboard=True)
     )
 
+@router.message(PierManagerStates.cash_sale_payment, F.text == "🔄 Очистить корзину")
+async def ops_cash_clear_cart(message: types.Message, state: FSMContext):
+    await state.update_data(cart=[])
+    await message.answer("✅ Корзина очищена.")
+    await state.set_state(PierManagerStates.cash_sale_category)
+    await show_category_selection(message)
+
 @router.message(PierManagerStates.cash_sale_product)
 async def ops_cash_select_product(message: types.Message, state: FSMContext):
     text = message.text
-    # Parse product name from button text "Name (Price฿)"
-    match = re.match(r"(.+)\s\((\d+)฿\)", text)
+    # Parse product name from button text "Emoji Name (Price฿)"
+    match = re.search(r"(.+)\s\((\d+)฿\)", text)
     if not match:
         await message.answer("⚠️ Пожалуйста, используйте кнопки для выбора товара.")
         return
     
-    product_name = match.group(1).strip()
+    # Remove emoji from name if present
+    full_name = match.group(1).strip()
+    product_name = re.sub(r"^[^\w\s]\s*", "", full_name).strip()
     price = int(match.group(2))
     
     await state.update_data(current_item={'name': product_name, 'price': price})
@@ -439,11 +496,13 @@ async def ops_cash_select_product(message: types.Message, state: FSMContext):
 
 @router.message(PierManagerStates.cash_sale_quantity, F.text == "🔙 Назад")
 async def ops_cash_quantity_back(message: types.Message, state: FSMContext):
-    products = await cash_service.get_active_products()
     data = await state.get_data()
+    cat = data.get("selected_category")
+    products = await cash_service.get_active_products()
+    filtered = [p for p in products if p.category == cat or (cat == "Other" and p.category not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
     cart = data.get("cart", [])
     await state.set_state(PierManagerStates.cash_sale_product)
-    await show_product_selection(message, products, cart)
+    await show_product_selection(message, filtered, cart)
 
 @router.message(PierManagerStates.cash_sale_quantity, F.text.regexp(r"^\d+$"))
 async def ops_cash_select_quantity(message: types.Message, state: FSMContext):
@@ -468,18 +527,24 @@ async def ops_cash_select_quantity(message: types.Message, state: FSMContext):
         })
     
     await state.update_data(cart=cart)
+    data = await state.get_data()
+    cat = data.get("selected_category")
     products = await cash_service.get_active_products()
+    filtered = [p for p in products if p.category == cat or (cat == "Other" and p.category not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
+    
     await state.set_state(PierManagerStates.cash_sale_product)
-    await message.answer(f"✅ Добавлено: {current_item['name']} x{quantity}")
-    await show_product_selection(message, products, cart)
+    await message.answer(f"✅ Добавлено: <b>{current_item['name']}</b> x{quantity}", parse_mode="HTML")
+    await show_product_selection(message, filtered, cart)
 
 @router.message(PierManagerStates.cash_sale_payment, F.text == "🔙 Назад к товарам")
 async def ops_cash_payment_back(message: types.Message, state: FSMContext):
-    products = await cash_service.get_active_products()
     data = await state.get_data()
+    cat = data.get("selected_category")
+    products = await cash_service.get_active_products()
+    filtered = [p for p in products if p.category == cat or (cat == "Other" and p.category not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
     cart = data.get("cart", [])
     await state.set_state(PierManagerStates.cash_sale_product)
-    await show_product_selection(message, products, cart)
+    await show_product_selection(message, filtered, cart)
 
 @router.message(PierManagerStates.cash_sale_payment, F.text.in_(["💵 Наличные B", "💳 Онлайн"]))
 async def ops_cash_confirm_sale(message: types.Message, state: FSMContext):
@@ -534,14 +599,17 @@ async def ops_cash_session_report(message: types.Message, state: FSMContext):
     
     text = (
         f"📊 <b>Отчет за смену — Пирс {pier}</b>\n"
-        f"📅 Открыта: {session.opened_at.strftime('%H:%M %d.%m.%Y')}\n"
+        f"📅 Открыта: <code>{session.opened_at.strftime('%H:%M %d.%m.%Y')}</code>\n"
         f"──────────────────\n"
-        f"🛒 Продано товаров:\n{items_text or '—'}\n"
+        f"💼 <b>Статистика продаж:</b>\n"
+        f"💰 Итого:  <b>{report['total_amount']:,}฿</b>\n"
+        f"💵 Налич:  <b>{report['cash_amount']:,}฿</b>\n"
+        f"💳 Онлйн:  <b>{report['online_amount']:,}฿</b>\n"
+        f"🧾 Чеков:  <b>{report['sales_count']}</b>\n"
         f"──────────────────\n"
-        f"💵 Наличные: <b>{report['cash_amount']}฿</b>\n"
-        f"💳 Онлайн: <b>{report['online_amount']}฿</b>\n"
-        f"💰 <b>ИТОГО: {report['total_amount']}฿</b>\n"
-        f"🧾 Всего чеков: <b>{report['sales_count']}</b>"
+        f"🛒 <b>Продано товаров:</b>\n{items_text or '—'}\n"
+        f"──────────────────\n"
+        f"👤 Менеджер: {message.from_user.full_name}"
     )
     
     await message.answer(text, parse_mode="HTML")
@@ -582,102 +650,6 @@ async def ops_cash_back_to_ops(message: types.Message, state: FSMContext):
     await state.set_state(PierManagerStates.pier_ops)
     await show_pier_ops_menu(message, pier)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OPS: 🏞 Нац. парки
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _detect_nps(program_name: str) -> list[str]:
-    """Returns list of NP codes for the given program name (may be multiple)."""
-    lower = program_name.lower()
-    for keyword, codes in NP_PROGRAM_MAP:
-        if keyword in lower:
-            return codes
-    return []
-
-
-def _np_fee_line(code: str) -> str:
-    fee = NP_FEES[code]
-    now = get_phuket_now()
-    is_sunday = now.weekday() == 6
-    lines = []
-    # Price line
-    price = f"{fee['emoji']} взр. {fee['adult']}฿ / реб. {fee['child']}฿"
-    if fee["parking_flat"]:
-        price += f" + {fee['parking_flat']}฿ паркинг (за заход)"
-    else:
-        price += " (без парковки)"
-    lines.append(f"  💵 {price}")
-    # Free rule
-    if fee["free_per_10"] and not (code == "JB" and is_sunday):
-        lines.append(f"  🎫 Бесплатно: каждые 10 — {fee['free_per_10']} бесплатно")
-    if fee["sunday_note"] and is_sunday:
-        lines.append(f"  {fee['sunday_note']}")
-    elif fee["sunday_note"] and not is_sunday:
-        lines.append(f"  ℹ️ {fee['sunday_note']}")
-    return "\n".join(lines)
-
-
-def _calc_envelope(code: str, adults: int, children: int, is_sunday: bool) -> tuple[int, str]:
-    """
-    Returns (total_thb, explanation_str).
-    Rules:
-      PP : A×350 + C×200 + 100 flat parking (no auto-free)
-      JB weekday: (A - floor(A/10)×2)×300 + (C - floor(C/10)×2)×150 + 100 parking
-      JB Sunday : A×300 + C×150 + 100 parking (full price, no free)
-      HG : (A - floor(A/10))×300 + (C - floor(C/10))×150 (no parking)
-    """
-    fee = NP_FEES[code]
-    parking = fee["parking_flat"]
-    lines = []
-
-    if code == "PP":
-        pay_a = adults
-        pay_c = children
-        total = pay_a * 350 + pay_c * 200 + parking
-        if pay_a:
-            lines.append(f"{pay_a}×350฿")
-        if pay_c:
-            lines.append(f"{pay_c}×200฿ (дет)")
-        if parking:
-            lines.append(f"+{parking}฿ паркинг")
-
-    elif code == "JB":
-        if is_sunday:
-            pay_a, pay_c = adults, children
-            free_a = free_c = 0
-            lines.append("⚠️ Воскресенье — все платят")
-        else:
-            free_a = (adults // 10) * 2
-            free_c = (children // 10) * 2
-            pay_a = adults - free_a
-            pay_c = children - free_c
-        total = pay_a * 300 + pay_c * 150 + parking
-        if pay_a:
-            lines.append(f"{pay_a}×300฿")
-        if not is_sunday and (free_a or free_c):
-            lines.append(f"(-{free_a} беспл.)")
-        if pay_c:
-            lines.append(f"{pay_c}×150฿ (дет)")
-        if parking:
-            lines.append(f"+{parking}฿ паркинг")
-
-    else:  # HG
-        free_a = adults // 10
-        free_c = children // 10
-        pay_a = adults - free_a
-        pay_c = children - free_c
-        total = pay_a * 300 + pay_c * 150  # no parking
-        if pay_a:
-            lines.append(f"{pay_a}×300฿")
-        if free_a:
-            lines.append(f"(-{free_a} беспл.)")
-        if pay_c:
-            lines.append(f"{pay_c}×150฿ (дет)")
-
-    formula = " ".join(lines) + f" = {total}฿"
-    return total, formula
-
-
 @router.message(PierManagerStates.pier_ops, F.text == "🏞 Нац. парки")
 async def ops_nat_parks(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -699,7 +671,7 @@ async def ops_nat_parks(message: types.Message, state: FSMContext):
 
     for plan in plans:
         for prog in plan.programs:
-            codes = _detect_nps(prog.name)
+            codes = detect_nps(prog.name)
             for code in codes:
                 if code in np_entries:
                     np_entries[code].append({
@@ -727,7 +699,7 @@ async def ops_nat_parks(message: types.Message, state: FSMContext):
             continue
         f = NP_FEES[code]
         report += f"<b>{f['emoji']} {f['name']}</b>\n"
-        report += f"{_np_fee_line(code)}\n"
+        report += f"{np_fee_line(code)}\n"
         for e in entries:
             pax_total = _sum_pax(e['pax'])
             total_np_pax += pax_total
@@ -791,7 +763,7 @@ async def ops_envelope_start(message: types.Message, state: FSMContext):
             boat_total = 0
             for code in ["PP", "JB", "HG"]:
                 fee = NP_FEES[code]
-                total, formula = _calc_envelope(code, pa, pc, is_sunday)
+                total, formula = calc_envelope(code, pa, pc, is_sunday)
                 boat_total += total
                 report += f"  {fee['emoji']} <code>{total:,}฿</code> ({formula})\n"
             
@@ -853,7 +825,7 @@ async def ops_envelope_calc(message: types.Message, state: FSMContext):
     grand_total = 0
     for code in ["PP", "JB", "HG"]:
         fee = NP_FEES[code]
-        total, formula = _calc_envelope(code, adults, children, is_sunday)
+        total, formula = calc_envelope(code, adults, children, is_sunday)
         grand_total += total
         report += f"{fee['emoji']} <b>{fee['name']}</b>\n"
         report += f"  {formula}\n"

@@ -49,7 +49,7 @@ async def cache_user_schedule(session, bot: Bot, user: User, sheet, all_guides_s
         ScheduleCache.date == date_normalized
     )
     cache_result = await session.execute(cache_query)
-    cache_entry = cache_result.scalar_one_or_none()
+    cache_entry = cache_result.scalars().first()
     
     if not cache_entry:
         # First time seeing this date for this user, just cache it
@@ -107,7 +107,7 @@ async def cache_user_sea_schedule(session, bot: Bot, user: User, target_date: da
         ScheduleCache.date == date_normalized
     )
     cache_result = await session.execute(cache_query)
-    cache_entry = cache_result.scalar_one_or_none()
+    cache_entry = cache_result.scalars().first()
     
     if not cache_entry:
         new_cache = ScheduleCache(
@@ -187,7 +187,7 @@ async def check_guide_wakeups(bot: Bot):
                         WakeUpConfirmation.pickup_time == p_time_str
                     )
                     res = await session.execute(q)
-                    conf = res.scalar_one_or_none()
+                    conf = res.scalars().first()
                     
                     if not conf:
                         # 4. Send Notification
@@ -325,7 +325,7 @@ async def setup_scheduler(bot: Bot):
     async with AsyncSessionLocal() as session:
         query = select(AppSettings).where(AppSettings.key == "polling_interval")
         result = await session.execute(query)
-        setting = result.scalar_one_or_none()
+        setting = result.scalars().first()
         interval = int(setting.value) if setting else config.POLLING_INTERVAL
 
     scheduler.add_job(

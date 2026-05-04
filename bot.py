@@ -8,7 +8,7 @@ from aiogram.methods import SendMessage, EditMessageText, SendPhoto, SendDocumen
 from aiogram.methods.base import TelegramMethod
 from config import config
 from database.db import init_db
-from handlers import common, guide, admin, feedback, reports, help as help_handler, pier_manager
+from handlers import common, guide, admin, feedback, reports, help as help_handler, pier_manager, ai_parser
 from services.scheduler import setup_scheduler
 from utils.logging_middleware import LoggingMiddleware
 from loguru import logger
@@ -92,8 +92,8 @@ class MonitoringBot(Bot):
                         from sqlalchemy import select
                         async with AsyncSessionLocal() as session:
                             stmt = select(User).where(User.telegram_id == chat_id)
-                            result = await session.execute(stmt)
-                            db_user = result.scalar_one_or_none()
+                            db_res = await session.execute(stmt)
+                            db_user = db_res.scalars().first()
                             if db_user and db_user.username:
                                 destination_name = f"@{db_user.username}"
                             elif db_user and db_user.full_name:
@@ -147,6 +147,11 @@ async def main():
     # Setup Scheduler
     await setup_scheduler(bot)
 
+    # Start Tunnel Monitor (Dynamic URL)
+    from services.tunnel_service import tunnel_monitor_service
+    await tunnel_monitor_service.start()
+
+
     # ─── Register Global Error Handler ───────────────────────────────────────
     dp.errors.register(handle_error)
 
@@ -162,6 +167,7 @@ async def main():
     dp.include_router(guide.router)
     dp.include_router(reports.router)
     dp.include_router(help_handler.router)
+    dp.include_router(ai_parser.router)
 
     # Start WebApp Backend
     from services.webapp import setup_webapp

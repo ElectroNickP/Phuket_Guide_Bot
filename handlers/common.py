@@ -23,7 +23,7 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
             logger.debug(f"Checking DB for user {message.from_user.id}")
             query = select(User).where(User.telegram_id == message.from_user.id)
             result = await session.execute(query)
-            user = result.scalar_one_or_none()
+            user = result.scalars().first()
             
             if not user:
                 logger.info(f"Registering new user {message.from_user.id}")
@@ -64,7 +64,7 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
                     logger.warning(f"Registration failed: {e}")
                     query = select(User).where(User.telegram_id == message.from_user.id)
                     result = await session.execute(query)
-                    user = result.scalar_one_or_none()
+                    user = result.scalars().first()
             
             logger.debug(f"Updating activity for {message.from_user.id}")
             await update_user_activity(message.from_user.id, "start")
@@ -85,7 +85,7 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
             async with AsyncSessionLocal() as session:
                 query = select(User).where(User.telegram_id == message.from_user.id)
                 result = await session.execute(query)
-                user = result.scalar_one_or_none()
+                user = result.scalars().first()
                 if user:
                     target_role = UserRole.SUPER_ADMIN if is_pankonick else UserRole.HEAD_OF_GUIDE
                     # Only enforce role if user has no specialized role yet (like pier_manager)
@@ -126,7 +126,7 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
             async with AsyncSessionLocal() as session:
                 query = select(User).where(User.telegram_id == message.from_user.id)
                 result = await session.execute(query)
-                db_user = result.scalar_one_or_none()
+                db_user = result.scalars().first()
                 role = db_user.role if db_user else None
             kb = get_admin_menu_keyboard(is_super_admin=is_pankonick, role=role, auth_token=auth_token)
         else:
@@ -135,7 +135,7 @@ async def cmd_start(message: types.Message, bot: Bot, **data):
             async with AsyncSessionLocal() as session:
                 query = select(User).where(User.telegram_id == message.from_user.id)
                 result = await session.execute(query)
-                db_user = result.scalar_one_or_none()
+                db_user = result.scalars().first()
                 role = db_user.role if db_user else None
             kb = get_main_menu_keyboard(role=role, auth_token=auth_token)
         

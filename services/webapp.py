@@ -61,7 +61,7 @@ async def get_user_role(telegram_id: int = None, username: str = None) -> str | 
             result = await session.execute(select(User.role).where(User.username == username))
         else:
             return None
-        return result.scalar_one_or_none()
+        return result.scalars().first()
         
 async def get_authorized_user(request):
     """Unified user detection via initData OR Token fallback."""
@@ -98,7 +98,7 @@ async def handle_init(request):
         # Fetch user details and role
         query = select(User).where(User.telegram_id == user_id)
         result = await session.execute(query)
-        db_user = result.scalar_one_or_none()
+        db_user = result.scalars().first()
         
         if not db_user:
             return web.json_response({"status": "error", "message": "User not found"}, status=404)
@@ -126,7 +126,7 @@ async def handle_get_schedule(request):
     if not username: # If token auth was used, fetch username from DB
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(User.username).where(User.telegram_id == user_id))
-            username = result.scalar_one_or_none()
+            username = result.scalars().first()
             
     if not username:
         return web.json_response({"status": "error", "message": "Username not determined"}, status=400)
@@ -175,7 +175,7 @@ async def handle_submit_report(request):
         if not username:
             async with AsyncSessionLocal() as session:
                 result = await session.execute(select(User.username).where(User.telegram_id == user_id))
-                username = result.scalar_one_or_none()
+                username = result.scalars().first()
         
         payload = req_data.get('payload', {})
         rep_type = payload.get('type')
@@ -184,7 +184,7 @@ async def handle_submit_report(request):
         async with AsyncSessionLocal() as session:
             # Find User
             result = await session.execute(select(User).where(User.username == username))
-            db_user = result.scalar_one_or_none()
+            db_user = result.scalars().first()
             if not db_user:
                 return web.json_response({"status": "error", "message": "User not registered in bot"}, status=400)
                 
@@ -263,8 +263,11 @@ async def handle_get_products(request):
         return web.json_response({"status": "error", "message": "Forbidden"}, status=403)
 
     products = await cash_service.get_active_products()
-    data = [{"id": p.id, "name": p.name, "cost_price": p.cost_price, "sale_price": p.sale_price} for p in products]
+    logger.info(f"API: Returning {len(products)} active products for @{username}")
+    data = [{"id": p.id, "name": p.name, "cost_price": p.cost_price, "sale_price": p.sale_price, "category": p.category} for p in products]
     return web.json_response({"status": "success", "data": data})
+
+
 
 @routes.get('/api/pier/session')
 async def handle_get_session(request):
@@ -374,6 +377,25 @@ async def handle_pier_sync(request):
     except PermissionError:
         return web.json_response({"status": "error", "message": "Permission denied to spreadsheet"}, status=403)
     except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+@routes.get('/api/pier/report')
+async def handle_pier_report(request):
+    user_id, username = await get_authorized_user(request)
+    if not user_id:
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    pier = request.query.get('pier', '')
+    if not pier:
+        return web.json_response({"status": "error", "message": "Pier required"}, status=400)
+    
+    try:
+        from utils.time import get_phuket_now
+        today = get_phuket_now().date()
+        report = await cash_service.get_daily_report(pier, today)
+        return web.json_response({"status": "success", "data": report})
+    except Exception as e:
+        logger.exception("Error fetching report")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 async def setup_webapp(bot: Bot) -> web.AppRunner:

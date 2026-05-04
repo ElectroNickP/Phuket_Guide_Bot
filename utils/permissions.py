@@ -33,7 +33,7 @@ class RoleFilter(BaseFilter):
         async with AsyncSessionLocal() as session:
             query = select(User).where(User.telegram_id == user_id)
             result = await session.execute(query)
-            user = result.scalar_one_or_none()
+            user = result.scalars().first()
             
             if not user:
                 return False
