@@ -9,6 +9,27 @@ from database.models import AppSettings
 from sqlalchemy import select
 import datetime
 import re
+import json
+
+DEBUG_LOG_PATH = "/home/nick/Projects/Phuket/Best/Best_sea_job_orders/.cursor/debug.log"
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
+    # region agent log
+    try:
+        payload = {
+            "id": f"{int(datetime.datetime.now().timestamp() * 1000)}_{hypothesis_id}",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(datetime.datetime.now().timestamp() * 1000),
+        }
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    # endregion
 
 class GoogleSheetsService:
     def __init__(self):
@@ -202,10 +223,28 @@ class GoogleSheetsService:
     async def get_guide_schedule(self, sheet: gspread.Worksheet, guide_row: int, target_date: datetime.date = None) -> str | None:
         if target_date is None:
             target_date = get_phuket_now().date()
+        # region agent log
+        _debug_log(
+            run_id="pre-fix",
+            hypothesis_id="H1_H2_H3",
+            location="services/google_sheets.py:get_guide_schedule:entry",
+            message="Entered get_guide_schedule",
+            data={"sheet_title": getattr(sheet, "title", None), "guide_row": guide_row, "target_date": str(target_date)},
+        )
+        # endregion
         
         day = target_date.day
         all_values = await self._get_cached_values(sheet)
         if not all_values or guide_row > len(all_values):
+            # region agent log
+            _debug_log(
+                run_id="pre-fix",
+                hypothesis_id="H3",
+                location="services/google_sheets.py:get_guide_schedule:row_guard",
+                message="Row guard returned None",
+                data={"has_values": bool(all_values), "values_len": len(all_values) if all_values else 0, "guide_row": guide_row},
+            )
+            # endregion
             return None
             
         header = all_values[0]
@@ -219,11 +258,29 @@ class GoogleSheetsService:
         
         if target_col == -1:
             target_col = 2 + day - 1
+            # region agent log
+            _debug_log(
+                run_id="pre-fix",
+                hypothesis_id="H2",
+                location="services/google_sheets.py:get_guide_schedule:fallback_col",
+                message="Header day not found, using fallback column",
+                data={"day": day, "fallback_col": target_col, "header_len": len(header)},
+            )
+            # endregion
             
         row_values = all_values[guide_row - 1]
         value = row_values[target_col].strip() if target_col < len(row_values) else ""
         
         if value:
+            # region agent log
+            _debug_log(
+                run_id="pre-fix",
+                hypothesis_id="H4",
+                location="services/google_sheets.py:get_guide_schedule:direct_value",
+                message="Returning direct cell value",
+                data={"target_col": target_col, "value_preview": value[:80]},
+            )
+            # endregion
             return value
             
         # Merged Check
@@ -237,6 +294,24 @@ class GoogleSheetsService:
                 sr, sc = m['startRowIndex'], m['startColumnIndex']
                 if sr < len(all_values) and sc < len(all_values[sr]):
                     merged_val = all_values[sr][sc].strip()
+                    # region agent log
+                    _debug_log(
+                        run_id="pre-fix",
+                        hypothesis_id="H1",
+                        location="services/google_sheets.py:get_guide_schedule:merge_hit",
+                        message="Merge cell source resolved",
+                        data={"source_row": sr, "source_col": sc, "merged_preview": merged_val[:80]},
+                    )
+                    # endregion
+        # region agent log
+        _debug_log(
+            run_id="pre-fix",
+            hypothesis_id="H1",
+            location="services/google_sheets.py:get_guide_schedule:implicit_none",
+            message="Function reached implicit None return path",
+            data={"guide_row": guide_row, "target_col": c_idx, "merges_count": len(merges)},
+        )
+        # endregion
     async def get_guide_4day_data(self, username: str) -> list[dict]:
         """Fetches 4-day schedule data for a specific username (Yesterday to After Tomorrow)"""
         now = get_phuket_now().date()
@@ -273,43 +348,5 @@ class GoogleSheetsService:
         
         return results
 
-    async def get_store_price_list(self) -> list[dict]:
-        """
-        Fetches products from 'Store Price List' sheet.
-        Cols: A (Name), B (Cost price), C (Sale price)
-        """
-        try:
-            spreadsheet = await asyncio.to_thread(self.client.open_by_key, config.STORE_SPREADSHEET_ID)
-            sheet = await asyncio.to_thread(spreadsheet.worksheet, "Store Price List")
-            all_values = await self._get_cached_values(sheet)
-            if not all_values or len(all_values) < 1:
-                return []
-
-            products = []
-            # Skip header
-            for row in all_values[1:]:
-                if not row or not row[0].strip():
-                    continue
-                
-                name = row[0].strip()
-                try:
-                    cost_price = int(re.sub(r'[^\d]', '', row[1])) if len(row) > 1 and row[1] else 0
-                    sale_price = int(re.sub(r'[^\d]', '', row[2])) if len(row) > 2 and row[2] else 0
-                except (ValueError, TypeError):
-                    cost_price = 0
-                    sale_price = 0
-                
-                products.append({
-                    "name": name,
-                    "cost_price": cost_price,
-                    "sale_price": sale_price,
-                    "category": row[3].strip() if len(row) > 3 and row[3].strip() else "Other"
-                })
-
-            
-            return products
-        except Exception as e:
-            logger.error(f"Error fetching Store Price List: {e}")
-            return []
 
 google_sheets = GoogleSheetsService()

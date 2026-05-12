@@ -63,7 +63,7 @@ def get_admin_menu_keyboard(is_super_admin: bool = False, role: str | None = Non
         [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="🔍 Тест-Аудит")],
         [KeyboardButton(text="📋 Job Order"), KeyboardButton(text="📅 Общее расписание")],
         [KeyboardButton(text="📝 Отчет за гида"), KeyboardButton(text="🔍 Тест Пробуждения")],
-        [KeyboardButton(text="🆘 Тест SOS")]
+        [KeyboardButton(text="🆘 Тест SOS"), KeyboardButton(text="⚙️ Настройки ИИ")]
     ]
     
     from database.models import UserRole

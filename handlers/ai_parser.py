@@ -130,5 +130,9 @@ async def handle_conversational_chat(message: types.Message, state: FSMContext):
     except Exception:
         pass
         
-    response = await ai_core.get_conversational_response(message.text, user_name)
+    # Check bot mode for context
+    from config import config
+    is_tourist = (config.BOT_MODE == "tourist")
+        
+    response = await ai_core.get_conversational_response(message.text, user_name, is_tourist=is_tourist)
     await message.answer(response)

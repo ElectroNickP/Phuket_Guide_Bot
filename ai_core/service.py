@@ -40,23 +40,53 @@ class AICoreService:
             logger.error(f"Error loading prompt {filename}: {e}")
         return ""
 
-    async def get_conversational_response(self, text: str, user_name: str) -> str:
+    async def get_conversational_response(self, text: str, user_name: str, is_tourist: bool = False) -> str:
         """
-        Enhanced conversational response using project knowledge base and real-time tools.
+        Enhanced conversational response using project knowledge base, real-time tools,
+        and dynamic behavioral rules from the database.
         """
         if not self.client:
             return "Извините, сейчас мой мозг (ИИ) не подключен. Разработчики скоро это исправят!"
 
         from ai_core.tools import TOOLS_SCHEMA, TOOLS_MAP
+        from database.db import AsyncSessionLocal
+        from database.models import AIRule
+        from sqlalchemy import select
 
-        # Load knowledge components
+        # 1. Load static knowledge components
         company_info = self._load_knowledge("company.txt")
         bot_features = self._load_knowledge("bot_features.txt")
         np_fees = self._load_knowledge("np_fees.txt")
         tech_manual = self._load_knowledge("technical_manual.txt")
         
-        # Load and format prompt
-        system_template = self._load_prompt("conversational.txt")
+        # 2. Fetch Dynamic Behavioral Rules
+        dynamic_rules = []
+        try:
+            async with AsyncSessionLocal() as session:
+                categories = ['general']
+                categories.append('tourist' if is_tourist else 'staff')
+                
+                logger.debug(f"Fetching AI rules for categories: {categories} (is_tourist={is_tourist})")
+                query = select(AIRule).where(AIRule.is_active == True, AIRule.category.in_(categories))
+                result = await session.execute(query)
+                rules = result.scalars().all()
+                for r in rules:
+                    dynamic_rules.append(f"### {r.title}\n{r.content}")
+                
+                if dynamic_rules:
+                    logger.info(f"Loaded {len(dynamic_rules)} dynamic rules for {user_name}")
+                else:
+                    logger.debug("No active dynamic rules found for this context.")
+        except Exception as e:
+            logger.error(f"Error loading dynamic AI rules: {e}")
+
+        # 3. Load and format prompt
+        prompt_name = "conversational_tourist.txt" if is_tourist else "conversational.txt"
+        system_template = self._load_prompt(prompt_name)
+        if not system_template:
+            # Fallback to general if specialized not found
+            system_template = self._load_prompt("conversational.txt")
+        
         if not system_template:
             system_template = "You are a professional assistant for Best Sea Phuket."
 
@@ -67,6 +97,11 @@ class AICoreService:
             technical_manual=tech_manual,
             user_name=user_name
         )
+
+        # Inject dynamic rules if any
+        if dynamic_rules:
+            system_prompt += "\n\n--- ДОПОЛНИТЕЛЬНЫЕ ПРАВИЛА ПОВЕДЕНИЯ ---\n"
+            system_prompt += "\n\n".join(dynamic_rules)
 
         messages = [
             {"role": "system", "content": system_prompt},

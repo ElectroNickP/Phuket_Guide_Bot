@@ -23,6 +23,15 @@ HELP_CATEGORIES = {
     "other": "💡 Другое"
 }
 
+@router.message(F.text == "/get_id")
+async def cmd_get_id(message: types.Message):
+    chat_id = message.chat.id
+    thread_id = message.message_thread_id
+    text = (f"🆔 <b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"🧵 <b>Thread ID (Topic):</b> <code>{thread_id}</code>")
+    await message.answer(text, parse_mode="HTML")
+
+
 @router.message(F.text == "🆘 Нужна помощь")
 async def cmd_help(message: types.Message, state: FSMContext):
     # Keep simulation data if already set

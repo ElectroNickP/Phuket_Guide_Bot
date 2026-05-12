@@ -13,13 +13,13 @@ class Settings(BaseSettings):
     SHARED_SECRET_KEY: str = "" # For cross-bot auth token verification
     DEFAULT_SPREADSHEET_ID: str = "1VzzL9hKRSwqga1nsjJ9Df2AlkSBVw_6zRorXDy_MURs"
     DEFAULT_SEA_SPREADSHEET_ID: str = "1wtSeYmTnwcC5d-AxNt3zLaMZhe5-mRXfYJ-gm4nJQ7E"
-    STORE_SPREADSHEET_ID: str = "19bI7_HT8oxpS_tQBlMXTn3xooqdnn5t6aDRjiwEbYLM"
     SERVICE_ACCOUNT_FILE: str = "google service account/best-telegram-bots-9df5029c28e8.json"
     TESTER_USERNAMES: str = "ElectroNick_X, pankonick"  # Authorized to use /become_user
     REPORT_GROUP_ID: int = -1003556020066
     REPORT_START_TOPIC_ID: int = 6
     REPORT_FINISH_TOPIC_ID: int = 69
     REPORT_TOPIC_ID: int = 6 # Backward compatibility or default
+    POS_LOG_TOPIC_ID: int = 569
     WAKEUP_LOG_TOPIC_ID: int = 45
     HELP_TOPIC_ID: int = 102
     BOT_MODE: str = "staff" # "tourist" or "staff"
@@ -37,11 +37,15 @@ class Settings(BaseSettings):
     
     # Database settings
     DB_URL: str = "sqlite+aiosqlite:///data/bot_database.db"
-    REDIS_URL: str = "redis://redis:6379/0"
+    REDIS_URL: str = "redis://best_sea_redis:6379/0"
     
     WEBAPP_URL: str = "https://your-app.ngrok.app" # Needs to be HTTPS
     WEBAPP_PORT: int = 8080
     
+    # POS Service (standalone cash register)
+    POS_API_URL: str = "http://localhost:8000"  # URL of the POS microservice
+    POS_API_KEY: SecretStr | None = None  # API key for POS auth
+
     # AI Settings
     OPENAI_API_KEY: SecretStr | None = None
     

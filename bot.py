@@ -9,8 +9,10 @@ from aiogram.methods.base import TelegramMethod
 from config import config
 from database.db import init_db
 from handlers import common, guide, admin, feedback, reports, help as help_handler, pier_manager, ai_parser, tourist_shop
+from handlers.admin import ai_settings
 from services.scheduler import setup_scheduler
 from utils.logging_middleware import LoggingMiddleware
+from services.pos_client import pos_client
 from loguru import logger
 
 # ─── Logging Configuration ────────────────────────────────────────────────────
@@ -148,10 +150,20 @@ async def main():
     if config.ENABLE_SCHEDULER:
         await setup_scheduler(bot)
 
-    # Start Tunnel Monitor (Dynamic URL)
     if config.ENABLE_TUNNEL:
         from services.tunnel_service import tunnel_monitor_service
         await tunnel_monitor_service.start()
+
+    # Verify POS Service Connectivity
+    try:
+        is_pos_ready = await pos_client.health_check()
+        if is_pos_ready:
+            logger.info("✅ POS Service is reachable and healthy.")
+        else:
+            logger.warning("⚠️ POS Service health check failed (status not 'ok'). Checking connectivity...")
+    except Exception as e:
+        logger.error(f"❌ Could not connect to POS Service at {pos_client.base_url}: {e}")
+        logger.warning("   Bot will continue, but POS operations may fail.")
 
 
     # ─── Register Global Error Handler ───────────────────────────────────────
@@ -170,6 +182,7 @@ async def main():
     dp.include_router(guide.router)
     dp.include_router(reports.router)
     dp.include_router(help_handler.router)
+    dp.include_router(ai_settings.router)
     dp.include_router(ai_parser.router)
 
     # Start WebApp Backend
@@ -186,6 +199,7 @@ async def main():
         logger.exception(f"Fatal error in polling: {e}")
     finally:
         await bot.session.close()
+        await pos_client.close()
         if webapp_runner:
             await webapp_runner.cleanup()
         logger.info(f"Bot ({config.BOT_MODE}) stopped.")

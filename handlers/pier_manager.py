@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton, InlineK
 from database.models import UserRole
 from utils.permissions import RoleFilter
 from services.sea_plan import sea_plan_service
-from services.cash_service import cash_service
+from services.pos_client import pos_client, POSClientError
 from utils.time import get_phuket_now
 from utils.auth_tokens import generate_auth_token
 from loguru import logger
@@ -217,7 +217,7 @@ async def ops_cash_main(message: types.Message, state: FSMContext):
         return
 
     # Check for active session
-    session = await cash_service.get_active_session(pier)
+    session = await pos_client.get_active_session(pier)
     await state.set_state(PierManagerStates.cash_main)
     
     if not session:
@@ -245,7 +245,13 @@ async def show_cash_menu(message: types.Message, pier: str, session):
     builder.adjust(1, 2, 1)
     
     now = get_phuket_now()
-    opened_at = session.opened_at.strftime("%H:%M")
+    opened_at = session.get('opened_at', '?')
+    if isinstance(opened_at, str) and 'T' in opened_at:
+        # Parse ISO datetime string
+        try:
+            from datetime import datetime
+            opened_at = datetime.fromisoformat(opened_at).strftime('%H:%M')
+        except: pass
     
     await message.answer(
         f"💰 <b>Касса — Пирс {pier}</b>\n"
@@ -265,15 +271,15 @@ async def ops_cash_open_session(message: types.Message, state: FSMContext):
     pier = data.get("selected_pier")
     manager_id = message.from_user.id
     
-    session = await cash_service.open_session(pier, manager_id)
+    session = await pos_client.open_session(pier, manager_id)
     await show_cash_menu(message, pier, session)
 
 @router.message(PierManagerStates.cash_main, F.text == "🔄 Синхронизировать товары")
 async def ops_cash_sync_products(message: types.Message, state: FSMContext):
     msg = await message.answer("⏳ Синхронизация товаров из Google Sheets...")
     try:
-        success = await cash_service.sync_products()
-        if success:
+        count = await pos_client.sync_products()
+        if count > 0:
             await msg.edit_text("✅ Список товаров успешно обновлен!")
         else:
             await msg.edit_text("❌ Ошибка при синхронизации товаров. Проверьте логи.")
@@ -294,7 +300,7 @@ async def ops_cash_sync_products(message: types.Message, state: FSMContext):
 
 @router.message(PierManagerStates.cash_main, F.text == "🛒 Продажа")
 async def ops_cash_start_sale(message: types.Message, state: FSMContext):
-    products = await cash_service.get_active_products()
+    products = await pos_client.get_products()
     if not products:
         await message.answer("⚠️ Список товаров пуст. Пожалуйста, синхронизируйте товары.")
         return
@@ -306,7 +312,7 @@ async def ops_cash_start_sale(message: types.Message, state: FSMContext):
 
 async def show_category_selection(message: types.Message, state: FSMContext):
     # Fetch categories from DB for parity with Web App
-    categories = await cash_service.get_active_categories()
+    categories = await pos_client.get_categories()
     
     # Mapping for nice labels with emojis
     MAPPING = {
@@ -353,7 +359,7 @@ async def show_category_selection(message: types.Message, state: FSMContext):
 async def ops_cash_cat_back(message: types.Message, state: FSMContext):
     data = await state.get_data()
     pier = data.get("selected_pier")
-    session = await cash_service.get_active_session(pier)
+    session = await pos_client.get_active_session(pier)
     await state.set_state(PierManagerStates.cash_main)
     await show_cash_menu(message, pier, session)
 
@@ -375,8 +381,8 @@ async def ops_cash_select_category(message: types.Message, state: FSMContext):
         else: category = "Other"
     
     await state.update_data(selected_category=category)
-    products = await cash_service.get_active_products()
-    filtered = [p for p in products if p.category == category]
+    products = await pos_client.get_products()
+    filtered = [p for p in products if p.get('category') == category]
     
     if not filtered:
         await message.answer(f"⚠️ В категории <b>{category}</b> нет активных товаров.", parse_mode="HTML")
@@ -390,8 +396,8 @@ async def ops_cash_select_category(message: types.Message, state: FSMContext):
 async def show_product_selection(message: types.Message, products, cart):
     builder = ReplyKeyboardBuilder()
     for p in products:
-        emoji = get_emoji_for_category(p.category)
-        builder.button(text=f"{emoji} {p.name} ({p.sale_price}฿)")
+        emoji = get_emoji_for_category(p.get('category', 'Other'))
+        builder.button(text=f"{emoji} {p['name']} ({p['sale_price']}฿)")
     
     builder.row(KeyboardButton(text="🧮 Посмотреть корзину"))
     builder.row(KeyboardButton(text="📁 К категориям"))
@@ -498,8 +504,8 @@ async def ops_cash_select_product(message: types.Message, state: FSMContext):
 async def ops_cash_quantity_back(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cat = data.get("selected_category")
-    products = await cash_service.get_active_products()
-    filtered = [p for p in products if p.category == cat or (cat == "Other" and p.category not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
+    products = await pos_client.get_products()
+    filtered = [p for p in products if p.get('category') == cat or (cat == "Other" and p.get('category') not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
     cart = data.get("cart", [])
     await state.set_state(PierManagerStates.cash_sale_product)
     await show_product_selection(message, filtered, cart)
@@ -529,8 +535,8 @@ async def ops_cash_select_quantity(message: types.Message, state: FSMContext):
     await state.update_data(cart=cart)
     data = await state.get_data()
     cat = data.get("selected_category")
-    products = await cash_service.get_active_products()
-    filtered = [p for p in products if p.category == cat or (cat == "Other" and p.category not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
+    products = await pos_client.get_products()
+    filtered = [p for p in products if p.get('category') == cat or (cat == "Other" and p.get('category') not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
     
     await state.set_state(PierManagerStates.cash_sale_product)
     await message.answer(f"✅ Добавлено: <b>{current_item['name']}</b> x{quantity}", parse_mode="HTML")
@@ -540,8 +546,8 @@ async def ops_cash_select_quantity(message: types.Message, state: FSMContext):
 async def ops_cash_payment_back(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cat = data.get("selected_category")
-    products = await cash_service.get_active_products()
-    filtered = [p for p in products if p.category == cat or (cat == "Other" and p.category not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
+    products = await pos_client.get_products()
+    filtered = [p for p in products if p.get('category') == cat or (cat == "Other" and p.get('category') not in ["Bar", "Rental", "Repellents", "Clothing", "Bags & Storage"])]
     cart = data.get("cart", [])
     await state.set_state(PierManagerStates.cash_sale_product)
     await show_product_selection(message, filtered, cart)
@@ -554,13 +560,19 @@ async def ops_cash_confirm_sale(message: types.Message, state: FSMContext):
     pier = data.get("selected_pier")
     manager_id = message.from_user.id
     
-    session = await cash_service.get_active_session(pier)
+    session = await pos_client.get_active_session(pier)
     if not session:
         await message.answer("❌ Смена была закрыта. Продажа невозможна.")
         await ops_cash_main(message, state)
         return
         
-    sale = await cash_service.record_sale(session.id, pier, manager_id, cart, payment_type)
+    sale = await pos_client.record_sale(
+        session_id=session['id'],
+        pier=pier,
+        manager_id=manager_id,
+        items_data=cart,
+        payment_type=payment_type,
+    )
     
     # Confirmation text
     items_text = ""
@@ -572,9 +584,8 @@ async def ops_cash_confirm_sale(message: types.Message, state: FSMContext):
         f"──────────────────\n"
         f"{items_text}"
         f"──────────────────\n"
-        f"💰 Итого: <b>{sale.total_amount}฿</b>\n"
+        f"💰 Итого: <b>{sale.get('total_amount', 0)}฿</b>\n"
         f"💳 Оплата: <b>{message.text}</b>\n"
-        f"📅 {sale.created_at.strftime('%H:%M %d.%m.%Y')}\n"
     )
     
     await message.answer(receipt, parse_mode="HTML")
@@ -585,13 +596,13 @@ async def ops_cash_confirm_sale(message: types.Message, state: FSMContext):
 async def ops_cash_session_report(message: types.Message, state: FSMContext):
     data = await state.get_data()
     pier = data.get("selected_pier")
-    session = await cash_service.get_active_session(pier)
+    session = await pos_client.get_active_session(pier)
     
     if not session:
         await message.answer("❌ Нет активной смены.")
         return
         
-    report = await cash_service.get_session_report(session.id)
+    report = await pos_client.get_session_report(session['id'])
     
     items_text = ""
     for name, qty in sorted(report["items_summary"].items()):
@@ -599,7 +610,7 @@ async def ops_cash_session_report(message: types.Message, state: FSMContext):
     
     text = (
         f"📊 <b>Отчет за смену — Пирс {pier}</b>\n"
-        f"📅 Открыта: <code>{session.opened_at.strftime('%H:%M %d.%m.%Y')}</code>\n"
+        f"📅 Открыта: <code>{session.get('opened_at', '?')}</code>\n"
         f"──────────────────\n"
         f"💼 <b>Статистика продаж:</b>\n"
         f"💰 Итого:  <b>{report['total_amount']:,}฿</b>\n"
@@ -618,7 +629,7 @@ async def ops_cash_session_report(message: types.Message, state: FSMContext):
 async def ops_cash_close_session(message: types.Message, state: FSMContext):
     data = await state.get_data()
     pier = data.get("selected_pier")
-    session = await cash_service.get_active_session(pier)
+    session = await pos_client.get_active_session(pier)
     
     if not session:
         await message.answer("❌ Смена уже закрыта.")
@@ -626,8 +637,8 @@ async def ops_cash_close_session(message: types.Message, state: FSMContext):
         return
         
     # Get final report before closing
-    report = await cash_service.get_session_report(session.id)
-    await cash_service.close_session(session.id)
+    report = await pos_client.get_session_report(session['id'])
+    await pos_client.close_session(session['id'], pier)
     
     text = (
         f"🔴 <b>Смена закрыта</b>\n"

@@ -12,9 +12,8 @@ from aiogram import Bot
 from config import config
 from services.google_sheets import google_sheets
 from database.db import AsyncSessionLocal
-from database.models import User, ReportSubmission, UserRole, Product, CashSession, Sale, SaleItem, TouristOrder, TouristOrderItem
-from services.cash_service import cash_service
-from services.payment_service import NSPKService
+from database.models import User, ReportSubmission, UserRole
+from services.pos_client import pos_client, POSClientError
 from utils.auth_tokens import verify_auth_token
 from sqlalchemy import select, update
 from datetime import datetime
@@ -65,7 +64,20 @@ async def get_user_role(telegram_id: int = None, username: str = None) -> str | 
         return result.scalars().first()
         
 async def get_authorized_user(request):
-    """Unified user detection via initData OR Token fallback. Supports multiple bots."""
+    """
+    Checks authorization via Telegram initData OR a shared API Key.
+    Returns (user_id, user_data) or (None, None).
+    """
+    # 1. Check for API Key (for browser/standalone access)
+    api_key_header = request.headers.get('X-API-Key')
+    api_key_query = request.query.get('api_key')
+    provided_key = api_key_header or api_key_query
+    
+    if provided_key and provided_key == config.POS_API_KEY.get_secret_value():
+        # Return a dummy admin user if API key matches
+        return int(config.ADMIN_ID), {"id": config.ADMIN_ID, "username": "admin", "first_name": "Admin"}
+
+    # 2. Check for Telegram initData
     init_data = request.query.get('initData')
     token = request.query.get('token')
     
@@ -272,10 +284,13 @@ async def handle_get_products(request):
         logger.warning(f"API: Forbidden access for user {username} (ID: {user_id}) with role {role}")
         return web.json_response({"status": "error", "message": "Forbidden"}, status=403)
 
-    products = await cash_service.get_active_products()
-    logger.info(f"API: Returning {len(products)} active products for @{username}")
-    data = [{"id": p.id, "name": p.name, "cost_price": p.cost_price, "sale_price": p.sale_price, "category": p.category} for p in products]
-    return web.json_response({"status": "success", "data": data})
+    try:
+        products = await pos_client.get_products()
+        logger.info(f"API: Returning {len(products)} active products for @{username}")
+        data = [{"id": p['id'], "name": p['name'], "cost_price": p.get('cost_price', 0), "sale_price": p['sale_price'], "category": p.get('category', 'Other')} for p in products]
+        return web.json_response({"status": "success", "data": data})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
 
 
 
@@ -294,30 +309,11 @@ async def handle_get_session(request):
         return web.json_response({"status": "error", "message": "Forbidden"}, status=403)
     
     # Always return the DAILY report (all sessions for today)
-    from utils.time import get_phuket_now
-    today = get_phuket_now().date()
-    daily_report = await cash_service.get_daily_report(pier, today)
-    
-    session_data = await cash_service.get_active_session(pier)
-    if session_data:
-        return web.json_response({
-            "status": "success", 
-            "data": {
-                "active": True,
-                "id": session_data.id,
-                "pier": session_data.pier,
-                "opened_at": session_data.opened_at.isoformat() if session_data.opened_at else None,
-                "report": daily_report
-            }
-        })
-    else:
-        return web.json_response({
-            "status": "success", 
-            "data": {
-                "active": False,
-                "report": daily_report if daily_report["sales_count"] > 0 else None
-            }
-        })
+    try:
+        session_data = await pos_client.get_session_with_report(pier)
+        return web.json_response({"status": "success", "data": session_data})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
 
 @routes.post('/api/pier/session/open')
 async def handle_open_session(request):
@@ -328,8 +324,11 @@ async def handle_open_session(request):
     req_data = await request.json()
     pier = req_data.get('pier')
     
-    session_data = await cash_service.open_session(pier, user_id)
-    return web.json_response({"status": "success", "session_id": session_data.id})
+    try:
+        result = await pos_client.open_session(pier, user_id)
+        return web.json_response({"status": "success", "session_id": result.get('session_id')})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
 
 @routes.post('/api/pier/session/close')
 async def handle_close_session(request):
@@ -341,17 +340,11 @@ async def handle_close_session(request):
     session_id = req_data.get('session_id')
     pier = req_data.get('pier')
     
-    success = await cash_service.close_session(session_id)
-    
-    # Return the full daily report after closing
-    from utils.time import get_phuket_now
-    today = get_phuket_now().date()
-    daily_report = await cash_service.get_daily_report(pier, today) if pier else None
-    
-    return web.json_response({
-        "status": "success" if success else "error",
-        "report": daily_report
-    })
+    try:
+        result = await pos_client.close_session(session_id, pier)
+        return web.json_response(result)
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
 
 @routes.post('/api/pier/sale')
 async def handle_pier_sale(request):
@@ -363,14 +356,16 @@ async def handle_pier_sale(request):
     payload = req_data.get('payload') # {session_id, items, payment_type, pier}
     
     try:
-        sale = await cash_service.record_sale(
+        sale = await pos_client.record_sale(
             session_id=payload['session_id'],
             pier=payload['pier'],
             manager_id=user_id,
-            items_data=payload['items'], # [{'name', 'quantity', 'price'}]
+            items_data=payload['items'],
             payment_type=payload['payment_type']
         )
-        return web.json_response({"status": "success", "sale_id": sale.id})
+        return web.json_response({"status": "success", "sale_id": sale.get('sale_id')})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
     except Exception as e:
         logger.exception("Error recording sale from WebApp")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
@@ -382,10 +377,10 @@ async def handle_pier_sync(request):
         return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
     
     try:
-        success = await cash_service.sync_products()
-        return web.json_response({"status": "success" if success else "error"})
-    except PermissionError:
-        return web.json_response({"status": "error", "message": "Permission denied to spreadsheet"}, status=403)
+        count = await pos_client.sync_products()
+        return web.json_response({"status": "success" if count > 0 else "error", "synced": count})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
@@ -400,104 +395,153 @@ async def handle_pier_report(request):
         return web.json_response({"status": "error", "message": "Pier required"}, status=400)
     
     try:
-        from utils.time import get_phuket_now
-        today = get_phuket_now().date()
-        report = await cash_service.get_daily_report(pier, today)
+        report = await pos_client.get_daily_report(pier)
         return web.json_response({"status": "success", "data": report})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
     except Exception as e:
         logger.exception("Error fetching report")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+# --- API v1 Proxy (for new POS UI compatibility) ---
+
+@routes.get('/api/v1/sessions/active')
+async def proxy_active_session(request):
+    user_id, _ = await get_authorized_user(request)
+    if not user_id: return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    pier = request.query.get('pier')
+    try:
+        data = await pos_client.get_session_with_report(pier)
+        return web.json_response({"status": "success", "data": data})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
+
+@routes.post('/api/v1/sessions/open')
+async def proxy_open_session(request):
+    user_id, _ = await get_authorized_user(request)
+    if not user_id: return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    body = await request.json()
+    try:
+        res = await pos_client.open_session(body.get('pier'), user_id)
+        return web.json_response({"status": "success", "session_id": res.get('session_id')})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
+
+@routes.post('/api/v1/sessions/close')
+async def proxy_close_session(request):
+    user_id, _ = await get_authorized_user(request)
+    if not user_id: return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    body = await request.json()
+    try:
+        res = await pos_client.close_session(body.get('session_id'), body.get('pier'))
+        return web.json_response(res)
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
+
+@routes.get('/api/v1/products')
+async def proxy_get_products(request):
+    user_id, _ = await get_authorized_user(request)
+    if not user_id: return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    try:
+        products = await pos_client.get_products()
+        return web.json_response({"status": "success", "data": products})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
+
+@routes.post('/api/v1/products/sync')
+async def proxy_sync_products(request):
+    user_id, _ = await get_authorized_user(request)
+    if not user_id: return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    try:
+        count = await pos_client.sync_products()
+        return web.json_response({"status": "success", "synced": count})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
+
+@routes.post('/api/v1/sales')
+async def proxy_record_sale(request):
+    user_id, _ = await get_authorized_user(request)
+    if not user_id: return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    body = await request.json()
+    try:
+        res = await pos_client.record_sale(
+            session_id=body['session_id'],
+            pier=body['pier'],
+            manager_id=user_id,
+            items_data=body['items'],
+            payment_type=body['payment_type']
+        )
+        return web.json_response({"status": "success", "sale_id": res.get('sale_id')})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
+
+@routes.get('/api/v1/sales/daily-report')
+async def proxy_daily_report(request):
+    user_id, _ = await get_authorized_user(request)
+    if not user_id: return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+    
+    pier = request.query.get('pier')
+    try:
+        report = await pos_client.get_daily_report(pier)
+        return web.json_response({"status": "success", "data": report})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
 
 # ─── TOURIST API ────────────────────────────────────────────────────────
 
 @routes.get('/api/tourist/products')
 async def tourist_products(request):
-    """Public endpoint for browsing products"""
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Product).where(Product.is_active == True).order_by(Product.category)
-        )
-        products = result.scalars().all()
-        
-        data = []
-        for p in products:
-            data.append({
-                "id": p.id,
-                "name": p.name,
-                "price": p.sale_price,
-                "category": p.category
-            })
-            
+    """Public endpoint for browsing products — proxied to POS"""
+    try:
+        products = await pos_client.get_products()
+        data = [{"id": p['id'], "name": p['name'], "price": p['sale_price'], "category": p.get('category', 'Other')} for p in products]
         return web.json_response({"status": "success", "products": data})
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
 
 @routes.post('/api/tourist/checkout')
 async def tourist_checkout(request):
-    """Create order and generate NSPK payment link. Supports both 'qty' and 'quantity'."""
+    """Create order and generate NSPK payment link — proxied to POS"""
     try:
         data = await request.json()
         items = data.get('items', [])
         telegram_id = data.get('telegram_id')
         pier = data.get('pier', 'Yamu')
         
-        # Internal normalization: Ensure both 'qty' and 'quantity' work
-        for i in items:
-            if 'quantity' in i and 'qty' not in i:
-                i['qty'] = i['quantity']
-            elif 'qty' in i and 'quantity' not in i:
-                i['quantity'] = i['qty']
-        
         if not items:
             return web.json_response({"status": "error", "message": "Cart is empty"}, status=400)
-            
-        try:
-            total_thb = sum(i['price'] * i.get('quantity', i.get('qty', 1)) for i in items)
-        except KeyError as e:
-            return web.json_response({"status": "error", "message": f"Missing field in cart items: {e}"}, status=400)
 
-        # 1. Initialize Payment
-        nspk = NSPKService()
-        pay_info = nspk.create_order(total_thb)
-        
-        if not pay_info:
-            return web.json_response({"status": "error", "message": "Payment gateway error"}, status=500)
-            
-        async with AsyncSessionLocal() as session:
-            # 2. Create Order
-            order = TouristOrder(
-                telegram_id=telegram_id,
-                pier=pier,
-                total_amount=total_thb,
-                status="pending",
-                payment_reference=pay_info['reference'],
-                payment_link=pay_info['link']
-            )
-            session.add(order)
-            await session.flush()
-            
-            # 3. Add Items
-            for i in items:
-                qty = i.get('quantity', i.get('qty', 1))
-                oi = TouristOrderItem(
-                    order_id=order.id,
-                    product_name=i['name'],
-                    quantity=qty,
-                    price_per_unit=i['price'],
-                    total_price=i['price'] * qty
-                )
-                session.add(oi)
-            
-            await session.commit()
-            
-            logger.info(f"Tourist Order #{order.id} created. Link: {pay_info['link']}")
-            
-            return web.json_response({
-                "status": "success",
-                "order_id": order.id,
-                "pay_url": pay_info['link'],
-                "total_rub": pay_info['amount_rub'],
-                "total_thb": total_thb
+        # Normalize item format
+        normalized_items = []
+        for i in items:
+            qty = i.get('quantity', i.get('qty', 1))
+            normalized_items.append({
+                'name': i['name'],
+                'quantity': qty,
+                'price': i['price'],
             })
-            
+
+        result = await pos_client.checkout(
+            items=normalized_items,
+            telegram_id=telegram_id,
+            pier=pier,
+        )
+        
+        return web.json_response({
+            "status": "success",
+            "order_id": result.get('order_id'),
+            "pay_url": result.get('pay_url'),
+            "total_rub": result.get('total_rub'),
+            "total_thb": result.get('total_thb'),
+        })
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
     except Exception as e:
         logger.error(f"Checkout error: {e}")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
@@ -505,20 +549,18 @@ async def tourist_checkout(request):
 @routes.get('/api/tourist/order/{id}')
 async def tourist_order_status(request):
     order_id = request.match_info['id']
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(TouristOrder).where(TouristOrder.id == order_id))
-        order = result.scalar_one_or_none()
-        if not order:
-            return web.json_response({"status": "error", "message": "Order not found"}, status=404)
-            
+    try:
+        result = await pos_client.get_order_status(int(order_id))
         return web.json_response({
             "status": "success",
             "order": {
-                "id": order.id,
-                "status": order.status,
-                "amount": order.total_amount,
+                "id": result.get('order_id'),
+                "status": result.get('order_status'),
+                "amount": result.get('total_amount'),
             }
         })
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
 
 @routes.get('/tourist')
 async def tourist_page(request):
@@ -531,23 +573,83 @@ async def tourist_page(request):
 
 @routes.get('/api/products/active')
 async def get_active_products(request):
-    """Returns list of active products for the shop"""
+    """Returns list of active products for the shop — proxied to POS"""
     try:
-        from services.cash_service import cash_service
-        products = await cash_service.get_active_products()
+        products = await pos_client.get_products()
         return web.json_response({
             "status": "success",
             "data": [
                 {
-                    "id": p.id,
-                    "name": p.name,
-                    "sale_price": p.sale_price,
-                    "category": p.category
+                    "id": p['id'],
+                    "name": p['name'],
+                    "sale_price": p['sale_price'],
+                    "category": p.get('category', 'Other'),
                 } for p in products
             ]
         })
+    except POSClientError as e:
+        return web.json_response({"status": "error", "message": e.detail}, status=e.status_code)
     except Exception as e:
         logger.error(f"Error fetching active products: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.post('/api/webhook/payment')
+async def handle_payment_webhook(request):
+    """
+    Receives payment confirmations from the POS service.
+    """
+    # 1. Verify API Key
+    api_key = request.headers.get('X-API-Key')
+    if api_key != config.POS_API_KEY.get_secret_value():
+        return web.json_response({"status": "error", "message": "Unauthorized"}, status=401)
+        
+    try:
+        data = await request.json()
+        logger.info(f"📩 Received payment webhook: {data}")
+        
+        status = data.get("status")
+        order = data.get("order", {})
+        
+        if status == "paid":
+            bot: Bot = request.app['bot']
+            
+            # Send notification to staff/group
+            msg = (f"💰 <b>Оплата получена!</b>\n\n"
+                   f"Заказ: #{order.get('id')}\n"
+                   f"Сумма: {order.get('total_thb')} THB ({order.get('total_rub')} RUB)\n"
+                   f"Пирс: {order.get('pier')}\n")
+            
+            if order.get('items'):
+                msg += "\n🛒 <b>Состав заказа:</b>\n"
+                for item in order['items']:
+                    msg += f"• {item['name']} x{item['quantity']}\n"
+
+            # Notify the manager group (using POS_LOG_TOPIC_ID for cash register logs)
+            logger.info(f"📤 Sending payment notification to Chat:{config.REPORT_GROUP_ID}, Thread:{config.POS_LOG_TOPIC_ID}")
+            await bot.send_message(
+                chat_id=config.REPORT_GROUP_ID,
+                message_thread_id=config.POS_LOG_TOPIC_ID,
+                text=msg,
+                parse_mode="HTML"
+            )
+            
+            # Optionally notify the user directly
+            user_id = order.get('telegram_id')
+            if user_id:
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text="✅ <b>Ваш заказ оплачен!</b>\n\nПожалуйста, покажите это сообщение менеджеру на пирсе для получения товара.",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not notify user {user_id}: {e}")
+
+        return web.json_response({"status": "success"})
+        
+    except Exception as e:
+        logger.exception("Error processing payment webhook")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 

@@ -15,6 +15,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./google service account:/app/google service account
+      - ../Best_pos_service/web/static:/app/web_app/static:ro
       - tunnel_shared:/app/shared
     env_file:
       - .env
@@ -23,10 +24,11 @@ services:
       - BOT_MODE=staff
       - ENABLE_SCHEDULER=False
       - ENABLE_WEBAPP=False
-      - ENABLE_TUNNEL=False
+      - ENABLE_TUNNEL=True
     restart: always
     depends_on:
       - redis
+      - pos_service
 
   bot_tourist:
     build: .
@@ -36,6 +38,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./google service account:/app/google service account
+      - ../Best_pos_service/web/static:/app/web_app/static:ro
       - tunnel_shared:/app/shared
     env_file:
       - .env
@@ -50,6 +53,7 @@ services:
       - "8080:8080"
     depends_on:
       - redis
+      - pos_service
 
   tunnel:
     build:
@@ -60,6 +64,38 @@ services:
     depends_on:
       - bot_tourist
 
+  # ── POS Microservice ──
+  pos_db:
+    image: postgres:16-alpine
+    container_name: best_pos_db
+    restart: always
+    environment:
+      POSTGRES_DB: pos_db
+      POSTGRES_USER: pos_user
+      POSTGRES_PASSWORD: pos_password
+    volumes:
+      - pos_db_data:/var/lib/postgresql/data
+
+  pos_service:
+    build:
+      context: ../Best_pos_service
+    container_name: best_pos_service
+    restart: always
+    depends_on:
+      - pos_db
+    env_file:
+      - ../Best_pos_service/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://pos_user:pos_password@pos_db:5432/pos_db
+      - BOT_WEBHOOK_URL=http://best_tourist_bot:8080/api/webhook/payment
+    ports:
+      - "8001:8000"
+    volumes:
+      - ../Best_pos_service:/app
+      - ../Best_pos_service/google_service_account:/app/google_service_account:ro
+      - ../Best_pos_service/web:/app/web:ro
+
 volumes:
   redis_data:
   tunnel_shared:
+  pos_db_data:

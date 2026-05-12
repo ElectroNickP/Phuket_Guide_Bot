@@ -17,3 +17,4 @@ aiohttp-cors==0.7.0
 openai>=1.0.0
 alembic
 telethon
+httpx

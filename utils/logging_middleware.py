@@ -38,11 +38,14 @@ class LoggingMiddleware(BaseMiddleware):
                 logger.error(f"Impersonation check error: {e}")
 
         # 2. Local Logging (Immediate)
+        chat_id = event.chat.id if isinstance(event, Message) else (event.message.chat.id if event.message else "N/A")
+        thread_id = getattr(event, 'message_thread_id', "N/A") if isinstance(event, Message) else "N/A"
+        
         if isinstance(event, Message):
             content = event.text or f"[{event.content_type}]"
-            logger.info(f"MSG  | {user_info} | {content[:80]}")
+            logger.info(f"MSG  | {user_info} | {chat_id}:{thread_id} | {content[:80]}")
         elif isinstance(event, CallbackQuery):
-            logger.info(f"CBQ  | {user_info} | data={event.data}")
+            logger.info(f"CBQ  | {user_info} | {chat_id} | data={event.data}")
 
         # 3. Background Tasks (Non-blocking)
         asyncio.create_task(self._process_background_tasks(event, user_info, data))
