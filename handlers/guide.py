@@ -613,11 +613,11 @@ async def cmd_schedule_4day(message: types.Message):
         logger.exception(f"Error fetching 4-day schedule for @{username}: {e}")
         await sent_msg.edit_text("❌ Произошла ошибка при получении расписания. Попробуй позже.")
 
-@router.message(F.text == "🌊 План на море")
+@router.message(F.text.in_({"🌊 План на море", "🌊 Мониторинг моря"}))
 async def cmd_sea_plan(message: types.Message):
     await message.answer("Выберите день для просмотра плана на море:", reply_markup=get_sea_plan_keyboard())
 
-@router.message(F.text == "🚐 План на суше")
+@router.message(F.text.in_({"🚐 План на суше", "🚐 Мониторинг суши"}))
 async def cmd_land_plan(message: types.Message):
     await message.answer("Выберите день для просмотра плана на суше:", reply_markup=get_land_plan_keyboard())
 
@@ -635,6 +635,61 @@ async def process_sea_query(callback: types.CallbackQuery, **data):
     user_username = imp_user["username"] if imp_user else callback.from_user.username
     if not user_username:
         await callback.message.edit_text("❌ У тебя не установлен username в Телеграм.")
+        return
+
+    # Admin check
+    from database.models import UserRole
+    is_admin = False
+    if imp_user:
+        is_admin = imp_user.get("role") in [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE, UserRole.PIER_MANAGER]
+    else:
+        if callback.from_user.id in config.admin_id_list:
+            is_admin = True
+        elif callback.from_user.username and callback.from_user.username.lower() in config.admin_username_list:
+            is_admin = True
+
+    if is_admin:
+        await callback.message.edit_text("🔍 Запрашиваю план на море (ВСЕ ГИДЫ)...")
+        active_guides = await sea_plan_service.get_active_sea_guides([target_date])
+        if not active_guides:
+            await callback.message.edit_text(f"📭 План на море на {target_date.strftime('%d.%m')} пуст.")
+            return
+
+        response = f"🌊 <b>План на море ({target_date.strftime('%d.%m')}) — ВСЕ ГИДЫ</b>\n\n"
+        builder = InlineKeyboardBuilder()
+        has_any = False
+
+        for uname in sorted(active_guides):
+            plans = await sea_plan_service.get_guide_sea_plan(uname, target_date)
+            if not plans: continue
+            
+            has_any = True
+            response += f"👤 <b>Гид: @{uname}</b>\n"
+            for plan in plans:
+                response += f"🚢 <b>Лодка:</b> {plan.boat}\n"
+                response += f"⚓️ <b>Пирс:</b> {plan.pier or '---'}\n"
+                response += f"👤 <b>Thai Guide:</b> {plan.thai_guide or '---'}\n"
+                response += f"👥 <b>Гид(ы):</b> {', '.join([g.full_info for g in plan.guides])}\n"
+                response += f"📝 <b>Программы:</b>\n"
+                for prog in plan.programs:
+                    prog_text = f"{prog.name} ({prog.pax} pax)"
+                    if len(plan.guides) > 1 and prog.guide:
+                        response += f"  • {prog_text} - {prog.short_guide}\n"
+                    else:
+                        response += f"  • {prog_text}\n"
+                response += f"📊 <b>GRAND TOTAL:</b> {plan.total_pax}\n\n"
+            
+            has_programs = any(len(p.programs) > 0 for p in plans)
+            if has_programs:
+                builder.button(text=f"📋 Гости @{uname}", callback_data=f"guestlist_guide_{target_date.strftime('%d.%m')}_{uname}")
+        
+        if not has_any:
+            await callback.message.edit_text(f"📭 План на море на {target_date.strftime('%d.%m')} пуст.")
+            return
+            
+        builder.adjust(2)
+        await callback.message.delete()
+        await send_long_message(callback.message, response, reply_markup=builder.as_markup())
         return
 
     await callback.message.edit_text("🔍 Запрашиваю план на море...")
@@ -714,14 +769,19 @@ async def process_guest_list_guide(callback: types.CallbackQuery, **data):
     # Impersonation Check (Tester Mode)
     imp_user = data.get("impersonated_user")
     try:
-        # data is guestlist_guide_dd.mm
-        date_str = callback.data.split('_')[2]
+        # data is guestlist_guide_dd.mm or guestlist_guide_dd.mm_username
+        parts = callback.data.split('_')
+        date_str = parts[2]
         target_date = datetime.datetime.strptime(f"{date_str}.{get_phuket_today().year}", "%d.%m.%Y").date()
     except ValueError:
         await callback.answer("Ошибка формата даты", show_alert=True)
         return
 
-    username = imp_user["username"] if imp_user else callback.from_user.username
+    if len(parts) > 3:
+        username = parts[3]
+    else:
+        username = imp_user["username"] if imp_user else callback.from_user.username
+        
     if not username:
         await callback.answer("Для работы требуется @username в Telegram.", show_alert=True)
         return
@@ -838,8 +898,34 @@ async def process_land_plan_guide(callback: types.CallbackQuery, **data):
         await callback.answer("Для работы требуется @username в Telegram.", show_alert=True)
         return
 
-    await callback.answer(f"Загружаю план на суше ({target_date.strftime('%d.%m')})...")
-    await _send_land_plan_for_date(callback.message, username, target_date)
+    # Admin check
+    from database.models import UserRole
+    is_admin = False
+    if imp_user:
+        is_admin = imp_user.get("role") in [UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.HEAD_OF_GUIDE, UserRole.PIER_MANAGER]
+    else:
+        if callback.from_user.id in config.admin_id_list:
+            is_admin = True
+        elif callback.from_user.username and callback.from_user.username.lower() in config.admin_username_list:
+            is_admin = True
+
+    if is_admin:
+        await callback.answer(f"Загружаю план на суше (ВСЕ ГИДЫ) на {target_date.strftime('%d.%m')}...")
+        await _send_land_plan_all(callback.message, target_date)
+    else:
+        await callback.answer(f"Загружаю план на суше ({target_date.strftime('%d.%m')})...")
+        await _send_land_plan_for_date(callback.message, username, target_date)
+
+async def _send_land_plan_all(message: types.Message, target_date: datetime.date):
+    """Helper to fetch and send land plans for all active guides (Admin view)"""
+    date_str = target_date.strftime("%d.%m")
+    active_guides = await sea_plan_service.get_active_land_guides([target_date])
+    if not active_guides:
+        await message.answer(f"🚐 <b>План на суше ({date_str})</b>\n\nНет запланированных заказов.", parse_mode="HTML")
+        return
+        
+    for uname in sorted(active_guides):
+        await _send_land_plan_for_date(message, uname, target_date)
 
 async def _send_land_plan_for_date(message: types.Message, username: str, target_date: datetime.date):
     """Helper to fetch and send land plan for a specific user and date"""

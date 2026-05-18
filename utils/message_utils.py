@@ -2,7 +2,7 @@ from aiogram import types
 
 MAX_MSG_LEN = 4096
 
-async def send_long_message(message: types.Message, text: str, parse_mode: str = "HTML", **kwargs):
+async def send_long_message(message: types.Message, text: str, parse_mode: str = "HTML", reply_markup=None, **kwargs):
     """Splits and sends a message that may exceed Telegram's 4096 character limit."""
     while text:
         chunk = text[:MAX_MSG_LEN]
@@ -11,5 +11,10 @@ async def send_long_message(message: types.Message, text: str, parse_mode: str =
             split_at = chunk.rfind("\n")
             if split_at > 0:
                 chunk = text[:split_at]
-        await message.answer(chunk, parse_mode=parse_mode, **kwargs)
+        
+        # Only add reply_markup to the final chunk
+        is_last_chunk = len(text) <= len(chunk)
+        current_markup = reply_markup if is_last_chunk else None
+        
+        await message.answer(chunk, parse_mode=parse_mode, reply_markup=current_markup, **kwargs)
         text = text[len(chunk):].lstrip("\n")
